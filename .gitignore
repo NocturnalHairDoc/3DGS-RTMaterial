@@ -1,0 +1,95 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── C++ / CUDA compiled artifacts ───────────────────────────────────────────
+*.so
+*.o
+*.a
+*.lib
+*.dll
+*.dylib
+submodules/*/build/
+submodules/*/*.egg-info/
+
+# ── Submodule source trees (tracked as git submodules, not inline) ───────────
+submodules/
+
+# ── Model output (large, not source code) ───────────────────────────────────
+output/
+*.ply
+*.pth
+*.pt
+*.ckpt
+*.pkl
+*.safetensors
+
+# ── Training logs ───────────────────────────────────────────────────────────
+logs/
+wandb/
+runs/
+tensorboard*/
+
+# ── Segmentation results (user-specific, not code) ──────────────────────────
+segmentation_res/
+
+# ── Data / datasets ─────────────────────────────────────────────────────────
+data/
+datasets/
+
+# ── 3dgrut / OptiX compiled plugin ──────────────────────────────────────────
+3dgrut/
+optix_integration/__pycache__/
+*.ninja
+*.ninja_log
+
+# ── PyTorch extensions cache ─────────────────────────────────────────────────
+~/.cache/torch_extensions/
+
+# ── DearPyGui / UI state ────────────────────────────────────────────────────
+imgui.ini
+*.dpg
+
+# ── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Images / screenshots (not source) ───────────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.mp4
+*.avi
+
+# ── PDF documents ───────────────────────────────────────────────────────────
+*.pdf
+
+# ── OS / editor ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+
+# ── Environment ─────────────────────────────────────────────────────────────
+.env
+.venv/
+env/
+venv/
+
+# ── Conda env (keep YML spec, ignore the actual env folder) ─────────────────
+conda-env/
