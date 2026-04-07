@@ -72,28 +72,57 @@ class MaterialSHEditor:
         self._model._features_rest.data.copy_(self._orig_rest)
         self._model._opacity.data.copy_(self._orig_opa)
 
-    def apply_all(self, material_assignments: dict, scene_mask: torch.Tensor):
-        """
-        Edit Gaussians according to material_assignments.
-
-        Parameters
-        ----------
-        material_assignments : {seg_id: {"type": str, ...}}
-        scene_mask           : (N,) int tensor, value = seg_id+1 for each Gaussian
-        """
-        self.restore()   # start from a clean slate each call
+    def apply_all(self, material_assignments, scene_mask):
+        self.restore()
 
         if scene_mask is None:
             return
 
         for seg_id, info in material_assignments.items():
-            mat_type = info.get("type", "Default")
-            if mat_type == "Default":
-                continue
             mask = (scene_mask == (seg_id + 1))
             if not mask.any():
                 continue
-            self._apply(mask, mat_type)
+
+            params = info.get("params", None)
+            mat_type = info.get("type", "Default")
+
+            if params is not None:
+                self._apply_params(mask, params)
+            elif mat_type != "Default":
+                self._apply(mask, mat_type)
+
+    def _apply_params(self, mask: torch.Tensor, params: dict):
+        orig_dc = self._orig_dc[mask]            # (N, 1, 3)
+        orig_rest = self._orig_rest[mask]
+        orig_opa = self._orig_opa[mask]
+
+        base_rgb = _dc_to_rgb(orig_dc[:, 0, :])
+
+        strength = float(params.get("strength", 1.0))
+        specular_gain = float(params.get("specular_gain", 1.0))
+        saturation = float(params.get("saturation", 1.0))
+        opacity_scale = float(params.get("opacity_scale", 1.0))
+        tint = torch.tensor(
+            params.get("tint", [1.0, 1.0, 1.0]),
+            device=base_rgb.device,
+            dtype=base_rgb.dtype,
+        ).view(1, 3)
+
+        mean = base_rgb.mean(dim=1, keepdim=True)
+        edited_rgb = mean + (base_rgb - mean) * saturation
+        edited_rgb = (edited_rgb * tint).clamp(0.0, 1.0)
+        final_rgb = torch.lerp(base_rgb, edited_rgb, strength).clamp(0.0, 1.0)
+
+        self._model._features_dc.data[mask, 0, :] = _rgb_to_dc(final_rgb)
+
+        edited_rest = orig_rest * specular_gain
+        final_rest = torch.lerp(orig_rest, edited_rest, strength)
+        self._model._features_rest.data[mask] = final_rest
+
+        orig_p = torch.sigmoid(orig_opa)
+        edited_p = (orig_p * opacity_scale).clamp(1e-6, 1.0 - 1e-6)
+        final_p = torch.lerp(orig_p, edited_p, strength)
+        self._model._opacity.data[mask] = torch.log(final_p / (1.0 - final_p))
 
     # ------------------------------------------------------------------
     # Per-material recipes

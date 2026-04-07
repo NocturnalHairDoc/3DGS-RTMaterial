@@ -23,7 +23,7 @@ except ImportError:
     HDBSCAN_AVAILABLE = False
 
 from scene import Scene, GaussianModel, FeatureGaussianModel
-from gaussian_renderer import render, render_contrastive_feature
+from gaussian_renderer import render, render_contrastive_feature, render_mask
 from scene.cameras import Camera
 from utils.graphics_utils import focal2fov, fov2focal
 
@@ -47,6 +47,24 @@ except Exception as _optix_import_err:
     OPTIX_INTEGRATION_AVAILABLE = False
     OptiXRenderer = None
     MaterialCompositor = None
+
+try:
+    from clip_utils.clip_utils import OpenCLIPNetwork, OpenCLIPNetworkConfig
+    CLIP_BACKEND_AVAILABLE = True
+except Exception:
+    CLIP_BACKEND_AVAILABLE = False
+    OpenCLIPNetwork = None
+    OpenCLIPNetworkConfig = None
+
+try:
+    from clip_utils.material_clip import (
+        score_crop_against_material_prompts,
+        topk_materials,
+        blend_material_params_from_scores,
+    )
+    MATERIAL_CLIP_HELPERS_AVAILABLE = True
+except Exception:
+    MATERIAL_CLIP_HELPERS_AVAILABLE = False
 
 # Keyword -> material type mapping for auto semantic-to-material assignment
 KEYWORD_MATERIAL_MAP = [
@@ -250,6 +268,8 @@ class RTGSViewerGUI:
         self._last_segment_times = -1
         self.segment_colors = None
         self.hidden_segments = set()
+        self.clip_model = None
+        self.suggest_material_flag = False
         self.confirm_hide_flag = False
         self.moving = False
         self.moving_middle = False
@@ -273,6 +293,8 @@ class RTGSViewerGUI:
         self._init_pca()
         self.load_model = True
         print("Model loaded.")
+
+        self._init_material_clip()
 
         # OptiX 3DGRT renderer (initialized after model is loaded into GPU)
         self._optix_renderer = None
@@ -329,13 +351,127 @@ class RTGSViewerGUI:
         cam.feature_height, cam.feature_width = self.height, self.width
         return cam
 
+    def _init_material_clip(self):
+        if not CLIP_BACKEND_AVAILABLE:
+            print("Material CLIP unavailable: clip_utils import failed")
+            return
+        if not MATERIAL_CLIP_HELPERS_AVAILABLE:
+            print("Material CLIP unavailable: clip_utils/material_clip.py not found")
+            return
+
+        try:
+            clip_cfg = OpenCLIPNetworkConfig()
+            self.clip_model = OpenCLIPNetwork(clip_cfg)
+            self.clip_model.eval()
+            print("Material CLIP ready.")
+        except Exception as e:
+            self.clip_model = None
+            print(f"Material CLIP init failed: {e}")
+
+    def _get_selected_segment_id(self):
+        if not dpg.does_item_exist("_material_segment_select"):
+            return -1
+        return self._parse_segment_select_value(dpg.get_value("_material_segment_select"))
+
+    @torch.no_grad()
+    def _extract_segment_crop(self, cam, pipe, seg_id, min_pixels=64):
+        if seg_id < 1:
+            return None
+
+        rgb_out = render(
+            cam,
+            self.engine["scene"],
+            pipe,
+            self.bg_color,
+            filtered_mask=self._get_hide_mask(),
+        )
+        rgb = rgb_out["render"].clamp(0.0, 1.0)
+
+        selected_mask_pts = (self.engine["scene"]._mask == (seg_id + 1)).float()
+        mask_out = render_mask(
+            cam,
+            self.engine["scene"],
+            pipe,
+            torch.zeros(3, device="cuda"),
+            precomputed_mask=selected_mask_pts,
+        )
+        seg_mask = mask_out["mask"][0] > 0.2
+
+        if int(seg_mask.sum().item()) < min_pixels:
+            return None
+
+        ys, xs = torch.where(seg_mask)
+        y0, y1 = int(ys.min().item()), int(ys.max().item())
+        x0, x1 = int(xs.min().item()), int(xs.max().item())
+
+        pad_y = max(4, int(0.10 * (y1 - y0 + 1)))
+        pad_x = max(4, int(0.10 * (x1 - x0 + 1)))
+
+        H, W = seg_mask.shape
+        y0 = max(0, y0 - pad_y)
+        y1 = min(H - 1, y1 + pad_y)
+        x0 = max(0, x0 - pad_x)
+        x1 = min(W - 1, x1 + pad_x)
+
+        crop_rgb = rgb[:, y0:y1 + 1, x0:x1 + 1]
+        crop_mask = seg_mask[y0:y1 + 1, x0:x1 + 1].float().unsqueeze(0)
+        crop = crop_rgb * crop_mask + (1.0 - crop_mask)
+        return crop.unsqueeze(0)
+
+    @torch.no_grad()
+    def _suggest_material_with_clip(self, cam, pipe):
+        if self.clip_model is None or not MATERIAL_CLIP_HELPERS_AVAILABLE:
+            if dpg.does_item_exist("_material_suggest_text"):
+                dpg.set_value("_material_suggest_text", "CLIP not available")
+            return
+
+        seg_id = self._get_selected_segment_id()
+        if seg_id < 1:
+            if dpg.does_item_exist("_material_suggest_text"):
+                dpg.set_value("_material_suggest_text", "Select a segment first")
+            return
+
+        crop = self._extract_segment_crop(cam, pipe, seg_id)
+        if crop is None:
+            if dpg.does_item_exist("_material_suggest_text"):
+                dpg.set_value("_material_suggest_text", "Selected segment is not visible enough in the current view")
+            return
+
+        scores = score_crop_against_material_prompts(self.clip_model, crop)
+        topk = topk_materials(scores, k=3)
+        params = blend_material_params_from_scores(scores)
+
+        top_type = topk[0][0]
+        seg_name = self.material_assignments.get(seg_id, {}).get(
+            "name", self.material_labels.get(seg_id, f"Material_{seg_id}")
+        )
+
+        self.material_assignments[seg_id] = {
+            "type": top_type,
+            "name": seg_name,
+            "params": params,
+        }
+        self.material_labels[seg_id] = seg_name
+
+        if dpg.does_item_exist("_material_type_select"):
+            dpg.set_value("_material_type_select", top_type)
+        if dpg.does_item_exist("_material_name_input"):
+            dpg.set_value("_material_name_input", seg_name)
+        if dpg.does_item_exist("_material_suggest_text"):
+            msg = ", ".join([f"{name}: {score:.3f}" for name, score in topk])
+            dpg.set_value("_material_suggest_text", f"CLIP suggestion -> {msg}")
+
+        self._mat_map_dirty = True
+        self._last_segment_times = -1
+        self._dirty = True
+
     def _should_update(self):
         """Return True if a re-render is needed (dirty flag check)."""
         # Always update if any action flag is pending
         if any([self.segment3d_flag, self.auto_segment_flag, self.clear_edit,
                 self.roll_back, self.save_flag, self.save_full_mask_flag,
                 self.load_segment_flag, self.confirm_hide_flag,
-                self.sam_driven_flag, self._dirty]):
+                self.sam_driven_flag, self.suggest_material_flag, self._dirty]):
             return True
         # Camera moved
         pose = self.camera.pose_movecenter
@@ -564,7 +700,7 @@ class RTGSViewerGUI:
         name = dpg.get_value("_material_name_input")
         if name is None or str(name).strip() == "":
             name = f"Material_{seg_id}"
-        self.material_assignments[seg_id] = {"type": mat_type, "name": str(name).strip()}
+        self.material_assignments[seg_id] = {"type": mat_type, "name": str(name).strip(), "params": None}
         self.material_labels[seg_id] = str(name).strip()
         self._last_segment_times = -1
         self._dirty = True
@@ -1021,6 +1157,10 @@ class RTGSViewerGUI:
                 print("Load failed: file not found or path empty")
             self._dirty = True
 
+        if self.suggest_material_flag:
+            self.suggest_material_flag = False
+            self._suggest_material_with_clip(cam, pipe)
+
         # ----- Render based on view mode -----
         view = dpg.get_value("_view_mode") if dpg.does_item_exist("_view_mode") else self.VIEW_RGB
 
@@ -1251,6 +1391,9 @@ class RTGSViewerGUI:
                                    callback=lambda: self._apply_material_assignment())
                     dpg.add_button(label="Confirm & hide",
                                    callback=lambda: setattr(self, 'confirm_hide_flag', True))
+                dpg.add_button(label="Suggest Material (CLIP)",
+                               callback=lambda: setattr(self, 'suggest_material_flag', True))
+                dpg.add_text("No CLIP suggestion yet", tag="_material_suggest_text", wrap=280)
                 dpg.add_child_window(tag="_material_list", height=100)
 
             # --- Ray-Tracing section (only shown in RT view mode) ---

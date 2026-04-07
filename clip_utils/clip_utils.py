@@ -203,4 +203,4 @@ class OpenCLIPNetwork(nn.Module):
         return self.model.encode_image(processed_input)
     
 def load_clip():
-    return OpenCLIPNetwork(OpenCLIPNetworkConfig)
+    return OpenCLIPNetwork(OpenCLIPNetworkConfig())
