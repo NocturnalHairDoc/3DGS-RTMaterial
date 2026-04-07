@@ -1,5 +1,30 @@
 import torch
 
+COLOR_TINTS = {
+    "red": [1.10, 0.85, 0.85],
+    "blue": [0.85, 0.95, 1.10],
+    "green": [0.85, 1.05, 0.85],
+    "gold": [1.08, 0.96, 0.72],
+    "silver": [1.00, 1.00, 1.02],
+    "black": [0.70, 0.70, 0.70],
+    "white": [1.05, 1.05, 1.05],
+}
+
+KEYWORD_PARAM_RULES = {
+    "metal": {"specular_gain": 1.6, "saturation": 0.6, "opacity_scale": 1.0},
+    "glass": {"specular_gain": 1.1, "saturation": 0.8, "opacity_scale": 0.25},
+    "plastic": {"specular_gain": 0.2, "saturation": 1.2, "opacity_scale": 1.0},
+    "matte": {"specular_gain": 0.0, "saturation": 1.0, "opacity_scale": 1.0},
+    "brushed": {"specular_gain": 1.2},
+    "polished": {"specular_gain": 1.8},
+    "frosted": {"opacity_scale": 0.45, "saturation": 0.9},
+    "transparent": {"opacity_scale": 0.2},
+    "opaque": {"opacity_scale": 1.0},
+    "shiny": {"specular_gain": 1.7},
+    "rough": {"specular_gain": 0.4},
+    "acrylic": {"specular_gain": 0.2, "saturation": 1.2, "opacity_scale": 0.7},
+}
+
 MATERIAL_CLIP_PROMPTS = {
     "Metal": [
         "a shiny metal object",
@@ -103,3 +128,28 @@ def blend_material_params_from_scores(scores, temperature=0.10):
         "opacity_scale": float(opacity_scale),
         "tint": [float(x) for x in tint.tolist()],
     }
+
+def params_from_text_prompt(text_prompt: str) -> dict:
+    text = text_prompt.lower()
+
+    params = {
+        "strength": 1.0,
+        "specular_gain": 1.0,
+        "saturation": 1.0,
+        "opacity_scale": 1.0,
+        "tint": [1.0, 1.0, 1.0],
+    }
+
+    for key, rule in KEYWORD_PARAM_RULES.items():
+        if key in text:
+            for k, v in rule.items():
+                params[k] = v
+
+    tint = torch.tensor([1.0, 1.0, 1.0], dtype=torch.float32)
+    for color_name, rgb in COLOR_TINTS.items():
+        if color_name in text:
+            tint = torch.tensor(rgb, dtype=torch.float32)
+            break
+
+    params["tint"] = [float(x) for x in tint.tolist()]
+    return params

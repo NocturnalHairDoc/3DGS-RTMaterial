@@ -61,6 +61,7 @@ try:
         score_crop_against_material_prompts,
         topk_materials,
         blend_material_params_from_scores,
+        params_from_text_prompt,
     )
     MATERIAL_CLIP_HELPERS_AVAILABLE = True
 except Exception:
@@ -270,6 +271,7 @@ class RTGSViewerGUI:
         self.hidden_segments = set()
         self.clip_model = None
         self.suggest_material_flag = False
+        self.apply_text_material_flag = False
         self.confirm_hide_flag = False
         self.moving = False
         self.moving_middle = False
@@ -465,13 +467,54 @@ class RTGSViewerGUI:
         self._last_segment_times = -1
         self._dirty = True
 
+    @torch.no_grad()
+    def _apply_text_material_from_prompt(self):
+        seg_id = self._get_selected_segment_id()
+        if seg_id < 1:
+            if dpg.does_item_exist("_material_suggest_text"):
+                dpg.set_value("_material_suggest_text", "Select a segment first")
+            return
+
+        text_prompt = ""
+        if dpg.does_item_exist("_material_text_prompt"):
+            text_prompt = dpg.get_value("_material_text_prompt")
+        text_prompt = str(text_prompt).strip()
+
+        if not text_prompt:
+            if dpg.does_item_exist("_material_suggest_text"):
+                dpg.set_value("_material_suggest_text", "Enter a material prompt")
+            return
+
+        params = params_from_text_prompt(text_prompt)
+        seg_name = self.material_assignments.get(seg_id, {}).get(
+            "name", self.material_labels.get(seg_id, f"Material_{seg_id}")
+        )
+
+        self.material_assignments[seg_id] = {
+            "type": "Default",
+            "name": seg_name,
+            "params": params,
+        }
+        self.material_labels[seg_id] = seg_name
+
+        if dpg.does_item_exist("_material_type_select"):
+            dpg.set_value("_material_type_select", "Default")
+        if dpg.does_item_exist("_material_name_input"):
+            dpg.set_value("_material_name_input", seg_name)
+        if dpg.does_item_exist("_material_suggest_text"):
+            dpg.set_value("_material_suggest_text", f"Applied text material -> {text_prompt}")
+
+        self._mat_map_dirty = True
+        self._last_segment_times = -1
+        self._dirty = True
+
     def _should_update(self):
         """Return True if a re-render is needed (dirty flag check)."""
         # Always update if any action flag is pending
         if any([self.segment3d_flag, self.auto_segment_flag, self.clear_edit,
                 self.roll_back, self.save_flag, self.save_full_mask_flag,
                 self.load_segment_flag, self.confirm_hide_flag,
-                self.sam_driven_flag, self.suggest_material_flag, self._dirty]):
+                self.sam_driven_flag, self.suggest_material_flag, self.apply_text_material_flag, self._dirty]):
             return True
         # Camera moved
         pose = self.camera.pose_movecenter
@@ -1161,6 +1204,10 @@ class RTGSViewerGUI:
             self.suggest_material_flag = False
             self._suggest_material_with_clip(cam, pipe)
 
+        if self.apply_text_material_flag:
+            self.apply_text_material_flag = False
+            self._apply_text_material_from_prompt()
+
         # ----- Render based on view mode -----
         view = dpg.get_value("_view_mode") if dpg.does_item_exist("_view_mode") else self.VIEW_RGB
 
@@ -1393,6 +1440,13 @@ class RTGSViewerGUI:
                                    callback=lambda: setattr(self, 'confirm_hide_flag', True))
                 dpg.add_button(label="Suggest Material (CLIP)",
                                callback=lambda: setattr(self, 'suggest_material_flag', True))
+                dpg.add_input_text(
+                    tag="_material_text_prompt",
+                    default_value="",
+                    hint="e.g. brushed metal, frosted blue glass",
+                )
+                dpg.add_button(label="Apply Text Material",
+                               callback=lambda: setattr(self, 'apply_text_material_flag', True))
                 dpg.add_text("No CLIP suggestion yet", tag="_material_suggest_text", wrap=280)
                 dpg.add_child_window(tag="_material_list", height=100)
 
