@@ -76,6 +76,11 @@ class MaterialSHEditor:
         """
         Edit Gaussians according to material_assignments.
 
+        Each entry in material_assignments can carry either:
+          {"type": "Metal"}                       — discrete preset
+          {"type": "Custom", "params": {...}}      — continuous params from material_clip
+            params keys: specular_gain, saturation, opacity_scale, tint, strength
+
         Parameters
         ----------
         material_assignments : {seg_id: {"type": str, ...}}
@@ -93,7 +98,54 @@ class MaterialSHEditor:
             mask = (scene_mask == (seg_id + 1))
             if not mask.any():
                 continue
-            self._apply(mask, mat_type)
+            # Custom continuous params (from material_clip text/CLIP pipeline)
+            if mat_type == "Custom" and "params" in info:
+                self.apply_params(mask, info["params"])
+            else:
+                self._apply(mask, mat_type)
+
+    def apply_params(self, mask: torch.Tensor, params: dict):
+        """
+        Apply material edits using continuous parameters from material_clip.
+
+        params keys (all optional, defaults to neutral):
+          specular_gain  float  — scale factor for higher-order SH (0=matte, >1=metallic)
+          saturation     float  — colour saturation multiplier (1=unchanged, >1=vivid)
+          opacity_scale  float  — opacity multiplier (1=opaque, 0.28=glass-like)
+          tint           list[3]— RGB multiplicative tint applied to DC
+          strength       float  — blend weight between original and edited (0–1)
+        """
+        strength      = float(params.get("strength", 1.0))
+        specular_gain = float(params.get("specular_gain", 1.0))
+        saturation    = float(params.get("saturation", 1.0))
+        opacity_scale = float(params.get("opacity_scale", 1.0))
+        tint          = params.get("tint", [1.0, 1.0, 1.0])
+
+        dev = self._model._features_dc.data.device
+
+        # ── DC: tint + saturation ─────────────────────────────────────────
+        dc       = self._model._features_dc.data[mask]   # (N, 1, 3)
+        base_rgb = _dc_to_rgb(dc[:, 0, :])               # (N, 3)
+
+        tint_t   = torch.tensor(tint, device=dev, dtype=torch.float32)
+        tinted   = (base_rgb * tint_t).clamp(0, 1)
+
+        mean     = tinted.mean(dim=1, keepdim=True)
+        saturated = (mean + (tinted - mean) * saturation).clamp(0, 1)
+
+        edited_rgb = base_rgb * (1 - strength) + saturated * strength
+        self._model._features_dc.data[mask, 0, :] = _rgb_to_dc(edited_rgb.clamp(0, 1))
+
+        # ── Higher-order SH: specular_gain ───────────────────────────────
+        orig_rest = self._orig_rest[mask]
+        new_rest  = orig_rest * (1 - strength + strength * specular_gain)
+        self._model._features_rest.data[mask] = new_rest
+
+        # ── Opacity ───────────────────────────────────────────────────────
+        if abs(opacity_scale - 1.0) > 1e-4:
+            orig_p = torch.sigmoid(self._orig_opa[mask])
+            new_p  = (orig_p * (1 - strength + strength * opacity_scale)).clamp(1e-6, 1 - 1e-6)
+            self._model._opacity.data[mask] = torch.log(new_p / (1.0 - new_p))
 
     # ------------------------------------------------------------------
     # Per-material recipes

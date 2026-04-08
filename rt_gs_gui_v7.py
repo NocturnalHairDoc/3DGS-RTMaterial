@@ -41,6 +41,10 @@ from scene import GaussianModel, FeatureGaussianModel
 from gaussian_renderer import render
 
 from material_sh_edit import MaterialSHEditor
+from clip_utils.material_clip import (
+    params_from_text_prompt,
+    MATERIAL_PARAM_PRESETS,
+)
 
 
 class SHMaterialViewer(RTGSViewerGUI):
@@ -110,13 +114,44 @@ class SHMaterialViewer(RTGSViewerGUI):
         # Default: "Material (SH)"
         return _render_sh()
 
+    # ──────────────────────────── text-prompt material application ──────────
+
+    def _apply_text_prompt_material(self):
+        """Read the text prompt input and apply params to the selected segment."""
+        if not dpg.does_item_exist("_mat_prompt_input"):
+            return
+        text = dpg.get_value("_mat_prompt_input").strip()
+        if not text:
+            return
+
+        # Parse material parameters from free-text description
+        params = params_from_text_prompt(text)
+
+        # Find selected segment
+        val = dpg.get_value("_material_segment_select") if dpg.does_item_exist("_material_segment_select") else None
+        seg_id = self._parse_segment_select_value(val)
+        if seg_id < 1:
+            print("[V8] No segment selected — select a segment first.")
+            return
+
+        # Store as Custom type with parsed params
+        self.material_assignments[seg_id] = {
+            "type": "Custom",
+            "name": text,
+            "params": params,
+        }
+        self.material_labels[seg_id] = text
+        self._mat_map_dirty = True
+        self._dirty = True
+        print(f"[V8] Segment {seg_id} ← '{text}' → params: {params}")
+
     # ─────────────────────────────────────────── override UI sub-mode items --
 
     def _register_dpg(self):
-        """Override only to swap the rt_submode combo items."""
+        """Override to swap sub-mode combo and add text-prompt panel."""
         super()._register_dpg()
 
-        # Replace the combo choices with V7-specific ones
+        # Replace the combo choices with V8-specific ones
         if dpg.does_item_exist("_rt_submode"):
             dpg.configure_item(
                 "_rt_submode",
@@ -124,11 +159,33 @@ class SHMaterialViewer(RTGSViewerGUI):
                 default_value="Material (SH)",
             )
 
-        # Hide light controls (no longer needed)
+        # Hide light controls (no longer needed for SH editing)
         for tag in ("_LightAz", "_LightEl", "_FillIntensity"):
             if dpg.does_item_exist(tag):
                 dpg.hide_item(tag)
-                # Also hide associated labels (they are siblings in the same group)
+
+        # Add text-prompt material panel inside the RT group
+        if dpg.does_item_exist("_rt_group"):
+            with dpg.group(parent="_rt_group"):
+                dpg.add_separator()
+                dpg.add_text("Material Prompt (team CLIP module)")
+                dpg.add_input_text(
+                    hint="e.g. 'frosted glass', 'shiny gold metal'",
+                    tag="_mat_prompt_input",
+                    width=-1,
+                )
+                dpg.add_button(
+                    label="Apply Prompt to Segment",
+                    callback=lambda: self._apply_text_prompt_material(),
+                    width=-1,
+                )
+                dpg.add_text("Preset params:", color=[180, 180, 180])
+                for mat_name, preset in MATERIAL_PARAM_PRESETS.items():
+                    label = (f"{mat_name}: "
+                             f"spec={preset['specular_gain']:.1f}  "
+                             f"sat={preset['saturation']:.1f}  "
+                             f"opa={preset['opacity_scale']:.2f}")
+                    dpg.add_text(label, color=[140, 200, 140])
 
 
 # ──────────────────────────────────────────────────────────── entry point ──
