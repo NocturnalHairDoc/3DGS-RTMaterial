@@ -71,6 +71,12 @@ imgui.ini
 *.mp4
 *.avi
 
+# Allow demo and assets directories
+!demo/
+!demo/**
+!assets/
+!assets/**
+
 # ── PDF documents ───────────────────────────────────────────────────────────
 *.pdf
 
