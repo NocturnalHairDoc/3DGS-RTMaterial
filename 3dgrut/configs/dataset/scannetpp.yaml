@@ -1,3 +1,0 @@
-type: scannetpp
-downsample_factor: 1
-test_split_interval: 8
