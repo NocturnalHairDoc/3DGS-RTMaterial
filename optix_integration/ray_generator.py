@@ -66,13 +66,16 @@ class RayGenerator:
             Batch with rays in world space.
         """
         pose = orbit_cam.pose_movecenter if orbit_cam.rot_mode == 1 else orbit_cam.pose_objcenter
-        # pose is w2c (COLMAP convention): R=pose[:3,:3] world->cam, T=pose[:3,3] cam-space translation
-        # Convert to c2w for ray generation: R_c2w = R.T, cam_center = -R.T @ T
-        R_w2c = pose[:3, :3]
+        # pose[:3,:3] = R_c2w (camera-to-world).
+        # SAGA/COLMAP stores cam.R as R_c2w: dataset_readers.py does
+        #   R = np.transpose(qvec2rotmat(...))
+        # and getWorld2View2 transposes it again to get R_w2c.
+        # Camera centre in world: C = -R_c2w @ T_w2c
+        R_c2w = pose[:3, :3]
         T_w2c = pose[:3, 3]
         c2w = np.eye(4, dtype=np.float32)
-        c2w[:3, :3] = R_w2c.T
-        c2w[:3, 3] = -(R_w2c.T @ T_w2c)
+        c2w[:3, :3] = R_c2w              # no transpose needed
+        c2w[:3, 3] = -(R_c2w @ T_w2c)   # camera centre = -R_c2w @ T_w2c
         fovy_rad = math.radians(orbit_cam.fovy)
         return self._build_batch_from_c2w(c2w, fovy_rad)
 
@@ -89,14 +92,16 @@ class RayGenerator:
         Returns:
             Batch with rays in world space.
         """
-        # SAGA Camera: R is world-to-camera rotation, T is world-to-camera translation
-        # c2w = [R^T | -R^T T; 0 0 0 1]
-        R = cam.R  # (3, 3)  world-to-cam rotation
-        T = cam.T  # (3,)    world-to-cam translation
+        # SAGA Camera: cam.R = R_c2w (camera-to-world).
+        # Confirmed: dataset_readers.py stores R = np.transpose(qvec2rotmat(...))
+        # and getWorld2View2 transposes it internally to get R_w2c.
+        # Camera centre in world: C = -R_c2w @ T_w2c
+        R_c2w = cam.R  # (3, 3)  camera-to-world rotation
+        T_w2c = cam.T  # (3,)    world-to-camera translation
 
         c2w = np.eye(4, dtype=np.float32)
-        c2w[:3, :3] = R.T
-        c2w[:3, 3] = -(R.T @ T)
+        c2w[:3, :3] = R_c2w              # no transpose needed
+        c2w[:3, 3] = -(R_c2w @ T_w2c)   # camera centre = -R_c2w @ T_w2c
 
         return self._build_batch_from_c2w(c2w, cam.FoVy)
 
