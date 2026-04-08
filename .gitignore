@@ -45,7 +45,14 @@ data/
 datasets/
 
 # ── 3dgrut / OptiX compiled plugin ──────────────────────────────────────────
-3dgrut/
+# 3dgrut/ source is tracked; ignore only compiled/cache artifacts inside it
+3dgrut/**/__pycache__/
+3dgrut/**/*.egg-info/
+3dgrut/**/build/
+3dgrut/**/*.so
+3dgrut/**/*.ninja
+3dgrut/**/*.ninja_log
+3dgrut/.git/
 optix_integration/__pycache__/
 *.ninja
 *.ninja_log
