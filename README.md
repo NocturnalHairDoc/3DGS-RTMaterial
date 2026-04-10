@@ -20,7 +20,7 @@ An interactive viewer that combines **3D Gaussian Splatting** segmentation (SAGA
 
 **Demo Video**
 
-<video src="demo/Screencast%20from%202026-04-07%2022-43-38.webm" controls width="700"></video>
+<video src="demo/demo.mp4" controls width="700"></video>
 
 ---
 
