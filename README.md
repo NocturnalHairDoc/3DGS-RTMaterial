@@ -1,5 +1,7 @@
 # 3DGS-RTMaterial
 
+> Semester project for **SFU CMPT 743** (Visual Computing).
+
 An interactive viewer that combines **3D Gaussian Splatting** segmentation (SAGA) with **OptiX ray-traced normals** and **per-segment Blinn-Phong material shading**.  Segments are assigned physical material types (Metal, Glass, Plastic, Matte) and rendered with physically-motivated BRDFs driven by true ray-traced surface normals from NVIDIA's 3DGRT tracer.
 
 ---
@@ -10,9 +12,15 @@ An interactive viewer that combines **3D Gaussian Splatting** segmentation (SAGA
 |:---:|:---:|
 | ![RGB](demo/Screenshot%20from%202026-04-07%2022-07-32.png) | ![Segmentation](demo/Screenshot%20from%202026-04-08%2015-40-43.png) |
 
-| Material Assignment | Ray-Tracing (OptiX) |
+**Material Assignment & Ray Tracing**
+
+| | |
 |:---:|:---:|
 | ![Material](demo/Screenshot%20from%202026-04-07%2022-29-49.png) | ![RT](demo/Screenshot%20from%202026-04-07%2022-38-10.png) |
+
+**Demo Video**
+
+<video src="demo/Screencast%20from%202026-04-07%2022-43-38.webm" controls width="700"></video>
 
 ---
 
