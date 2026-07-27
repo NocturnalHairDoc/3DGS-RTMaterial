@@ -73,6 +73,12 @@ An interactive viewer that combines **3D Gaussian Splatting** segmentation (SAGA
 
 OptiX SDK is **not** required at runtime — stubs are bundled inside `3dgrut/`.
 
+### Windows
+
+A native Windows implementation, including environment setup, SAM 2 mask extraction,
+scene training, feature training, rendering, and the interactive viewer, is available
+in [`v_windows`](v_windows/README_WINDOWS.md).
+
 ---
 
 ## Installation
