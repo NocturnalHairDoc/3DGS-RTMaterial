@@ -42,7 +42,6 @@ segmentation_res/
 
 # ── Data / datasets ─────────────────────────────────────────────────────────
 data/
-dataset/
 datasets/
 
 # ── 3dgrut / OptiX compiled plugin ──────────────────────────────────────────
@@ -108,13 +107,3 @@ venv/
 
 # ── Conda env (keep YML spec, ignore the actual env folder) ─────────────────
 conda-env/
-
-# ── Native Windows workspace ────────────────────────────────────────────────
-# Dependencies and generated files are created locally by the setup scripts.
-v_windows/vendor/
-v_windows/checkpoints/
-v_windows/output/
-v_windows/.cache/
-v_windows/.torch_extensions/
-v_windows/**/build/
-v_windows/**/*.egg-info/
