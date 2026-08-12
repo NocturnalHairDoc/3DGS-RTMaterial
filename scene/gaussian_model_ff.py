@@ -10,7 +10,6 @@
 #
 
 import torch
-import pytorch3d.ops
 import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from torch import nn
@@ -298,6 +297,7 @@ class FeatureGaussianModel:
     
     @torch.no_grad()
     def smooth_point_features(self, K = 16, smoothed_dim = 24):
+        import pytorch3d.ops
         if self.feature_smooth_map is None or self.feature_smooth_map["K"] != K:
             xyz = self.get_xyz
             nearest_k_idx = pytorch3d.ops.knn_points(
@@ -313,6 +313,7 @@ class FeatureGaussianModel:
         self._point_features.data = cur_features
     
     def get_smoothed_point_features(self, K = 16, dropout = 0.5):
+        import pytorch3d.ops
         if K <= 1:
             return self._point_features
 
@@ -341,6 +342,7 @@ class FeatureGaussianModel:
         return ret
 
     def get_multi_resolution_smoothed_point_features(self, sample_rates = (0.1, 0.5, 1.5), Ks = (4,4,16), smooth_weights = None):
+        import pytorch3d.ops
         assert len(sample_rates) == len(Ks) and (smooth_weights is None or smooth_weights.shape[1] == len(Ks))
         
 

@@ -103,6 +103,43 @@ def topk_materials(scores, k=3):
     return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:k]
 
 
+def aggregate_multiview_scores(view_scores):
+    """Robust mean material scores from one or more independently rendered views."""
+    if not view_scores:
+        raise ValueError("at least one view score is required")
+    names = set(view_scores[0])
+    if any(set(scores) != names for scores in view_scores):
+        raise ValueError("all views must score the same materials")
+    return {name: float(sum(scores[name] for scores in view_scores) / len(view_scores))
+            for name in sorted(names)}
+
+
+def select_confident_material(scores, min_score=0.15, min_margin=0.02):
+    ranked = topk_materials(scores, 2)
+    if not ranked:
+        return None, 0.0
+    margin = ranked[0][1] - ranked[1][1] if len(ranked) > 1 else float("inf")
+    if ranked[0][1] < min_score or margin < min_margin:
+        return None, float(margin)
+    return ranked[0][0], float(margin)
+
+
+def masked_original_rgb_crop(original_chw, mask_hw, padding=8, outside=0.5):
+    """Crop an independently rendered original RGB using only its segment mask."""
+    if original_chw.ndim != 3 or original_chw.shape[0] != 3 or mask_hw.ndim != 2:
+        raise ValueError("expected RGB (3,H,W) and mask (H,W)")
+    visible = mask_hw > 0.10
+    if not visible.any():
+        raise ValueError("selected segment is not visible")
+    ys, xs = torch.where(visible)
+    h, w = mask_hw.shape
+    y0, y1 = max(0, int(ys.min()) - padding), min(h, int(ys.max()) + padding + 1)
+    x0, x1 = max(0, int(xs.min()) - padding), min(w, int(xs.max()) + padding + 1)
+    soft = mask_hw[y0:y1, x0:x1].clamp(0, 1).unsqueeze(0)
+    rgb = original_chw[:, y0:y1, x0:x1].clamp(0, 1)
+    return rgb * soft + float(outside) * (1.0 - soft)
+
+
 def blend_material_params_from_scores(scores, temperature=0.10):
     material_names = list(MATERIAL_PARAM_PRESETS.keys())
     logits = torch.tensor([scores[m] for m in material_names], dtype=torch.float32)

@@ -45,12 +45,19 @@ _DEFAULT_BUILD_CONF = {
     "enable_kernel_timings": False,
     "particle_kernel_min_alpha": 1e-4,
     "particle_kernel_max_alpha": 1.0,
+    "particle_feature_half": False,
+    "feature_output_half": False,
 }
 
 
 class _Conf:
     def __init__(self, d):
         self.render = type("R", (), d)()
+        progressive = type("P", (), {"max_n_features": 3})()
+        activation = type("A", (), {"type": "none", "num_frequencies": 1})()
+        nht = type("N", (), {"dim": 48, "activation": activation, "interpolation_type": "none"})()
+        self.model = type("M", (), {"feature_type": "sh", "progressive_training": progressive,
+                                      "nht_features": nht})()
 
 
 def build_3dgrt_plugin(conf_overrides: dict | None = None, verbose: bool = True) -> bool:

@@ -40,6 +40,18 @@ from .ray_generator import RayGenerator
 
 logger = logging.getLogger(__name__)
 
+
+def sanitize_normals(normals: torch.Tensor) -> torch.Tensor:
+    """Replace invalid normals and normalize every non-degenerate vector."""
+    finite = torch.isfinite(normals).all(dim=-1, keepdim=True)
+    clean = torch.where(finite, normals, torch.zeros_like(normals))
+    length = torch.linalg.vector_norm(clean, dim=-1, keepdim=True)
+    return torch.where(
+        length > 1e-8,
+        clean / length.clamp_min(1e-8),
+        torch.zeros_like(clean),
+    )
+
 # Minimal 3DGRT render configuration.  Mirrors the defaults in the 3dgrut repo.
 _DEFAULT_RENDER_CONF = {
     "pipeline_type": "reference",
@@ -56,6 +68,8 @@ _DEFAULT_RENDER_CONF = {
     "enable_kernel_timings": False,
     "particle_kernel_min_alpha": 1e-4,
     "particle_kernel_max_alpha": 1.0,
+    "particle_feature_half": False,
+    "feature_output_half": False,
 }
 
 
@@ -63,6 +77,16 @@ class _RenderConf:
     """Simple namespace-like config consumed by setup_3dgrt and Tracer."""
     def __init__(self, d: dict):
         self.render = type("RenderConf", (), d)()
+        progressive = type("ProgressiveTrainingConf", (), {"max_n_features": 3})()
+        activation = type("ActivationConf", (), {"type": "none", "num_frequencies": 1})()
+        nht = type("NHTConf", (), {
+            "dim": 48, "activation": activation, "interpolation_type": "none"
+        })()
+        self.model = type("ModelConf", (), {
+            "feature_type": "sh",
+            "progressive_training": progressive,
+            "nht_features": nht,
+        })()
 
 
 class OptiXRenderer:
@@ -107,6 +131,7 @@ class OptiXRenderer:
         # 3DGRT Tracer (None until plugin is compiled)
         self._tracer = None
         self._bvh_built = False
+        self._active_mask_key = None
 
         self._try_load_tracer()
 
@@ -163,6 +188,12 @@ class OptiXRenderer:
         self._bvh_built = True
         logger.info(f"BVH built for {self.adapter.num_gaussians:,} Gaussians.")
 
+    @staticmethod
+    def _mask_key(mask: torch.Tensor | None):
+        if mask is None:
+            return None
+        return (mask.data_ptr(), mask.numel(), getattr(mask, "_version", 0))
+
     def update_bvh(self):
         """Incremental BVH update (cheaper than full rebuild)."""
         self.build_bvh(rebuild=False)
@@ -191,39 +222,77 @@ class OptiXRenderer:
         """
         if not self.available:
             return None
-        if not self._bvh_built:
-            logger.warning("render() called before build_bvh() — building now.")
-            self.build_bvh()
-
-        # Optionally mask to a subset of Gaussians
-        if segment_mask is not None:
-            bool_mask = segment_mask.bool()
+        # The OptiX acceleration structure contains only the active Gaussian
+        # subset. Rebuild when visibility changes, then reuse it on every frame.
+        bool_mask = segment_mask.bool().contiguous() if segment_mask is not None else None
+        desired_key = self._mask_key(bool_mask)
+        if not self._bvh_built or desired_key != self._active_mask_key:
             self.adapter.update_mask(bool_mask)
             self.build_bvh(rebuild=True)
-        else:
-            self.adapter.update_mask(None)
+            self._active_mask_key = desired_key
 
         # Build ray batch
+        batch = self._ray_batch(camera)
+        return self._trace_batch(batch)
+
+    def _ray_batch(self, camera, region=None):
         if hasattr(camera, "pose_movecenter"):
-            batch = self.ray_gen.from_orbit_camera(camera)
-        else:
-            batch = self.ray_gen.from_saga_camera(camera)
+            return self.ray_gen.from_orbit_camera(camera, region=region)
+        return self.ray_gen.from_saga_camera(camera, region=region)
+
+    def _trace_batch(self, batch):
 
         with torch.no_grad():
             out = self._tracer.render(self.adapter, batch, train=False)
 
         H, W = self.height, self.width
-        rgb = out["pred_rgb"].squeeze(0)        # (H, W, 3)
+        # Current 3DGRT names the ray colour tensor ``pred_features``; older
+        # integration revisions used ``pred_rgb``. Support both explicitly.
+        rgb_tensor = out.get("pred_features", out.get("pred_rgb"))
+        if rgb_tensor is None:
+            raise RuntimeError(f"3DGRT output has no RGB/features tensor: {sorted(out)}")
+        rgb = rgb_tensor.squeeze(0)        # (H, W, 3)
         opacity = out["pred_opacity"].squeeze(0)  # (H, W, 1)
         depth = out["pred_dist"].squeeze(0).squeeze(-1)   # (H, W)
-        normals = out["pred_normals"].squeeze(0)  # (H, W, 3)  already normalized
+        normals = out["pred_normals"].squeeze(0)  # (H, W, 3)
+        # 3DGRT can emit NaNs for rays whose normal estimate is degenerate.
+        # Never let those values enter visualisation or BRDF calculations.
+        normals = sanitize_normals(normals)
 
+        rgb = rgb + (1.0 - opacity) * self.adapter._bg_color.view(1, 1, 3)
         return {
-            "rgb": rgb.clamp(0.0, 1.0),
+            "rgb": torch.nan_to_num(rgb, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0),
             "normals": normals,
-            "depth": depth,
-            "opacity": opacity,
+            "depth": torch.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0),
+            "opacity": torch.nan_to_num(opacity, nan=0.0).clamp(0.0, 1.0),
         }
+
+    def render_tiled(self, camera, tile_size=1024, segment_mask=None, progress=None):
+        """Render bounded ray batches and stitch exact full-frame coordinates on CPU."""
+        if tile_size < 16:
+            raise ValueError("tile_size must be at least 16")
+        bool_mask = segment_mask.bool().contiguous() if segment_mask is not None else None
+        desired_key = self._mask_key(bool_mask)
+        if not self._bvh_built or desired_key != self._active_mask_key:
+            self.adapter.update_mask(bool_mask)
+            self.build_bvh(rebuild=True)
+            self._active_mask_key = desired_key
+        result = {
+            "rgb": torch.empty((self.height, self.width, 3), dtype=torch.float32),
+            "normals": torch.empty((self.height, self.width, 3), dtype=torch.float32),
+            "depth": torch.empty((self.height, self.width), dtype=torch.float32),
+            "opacity": torch.empty((self.height, self.width, 1), dtype=torch.float32),
+        }
+        regions = [(x, y, min(tile_size, self.width-x), min(tile_size, self.height-y))
+                   for y in range(0, self.height, tile_size)
+                   for x in range(0, self.width, tile_size)]
+        for index, (x, y, w, h) in enumerate(regions, 1):
+            tile = self._trace_batch(self._ray_batch(camera, (x, y, w, h)))
+            for key, value in tile.items():
+                result[key][y:y+h, x:x+w].copy_(value.detach().cpu())
+            if progress is not None:
+                progress(index, len(regions))
+        return result
 
     # ------------------------------------------------------------------
     # Convenience: render to numpy (H, W, 3) uint8 for DearPyGUI

@@ -44,7 +44,7 @@ class Camera(nn.Module):
         self.original_masks = masks
         self.mask_scales = mask_scales
 
-        # a dirty hack to make sure that the feature width is always 200
+        # The feature renderer currently requires a fixed width of 200 pixels.
         self.feature_width = 100
         self.feature_height = int(self.feature_width * self.image_height / self.image_width)
 
@@ -76,4 +76,3 @@ class MiniCam:
         self.full_proj_transform = full_proj_transform
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
-

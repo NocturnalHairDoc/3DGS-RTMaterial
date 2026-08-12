@@ -24,6 +24,7 @@ submodules/
 
 # ── Model output (large, not source code) ───────────────────────────────────
 output/
+output-v2/
 *.ply
 *.pth
 *.pt
@@ -39,22 +40,24 @@ tensorboard*/
 
 # ── Segmentation results (user-specific, not code) ──────────────────────────
 segmentation_res/
+exports/
+*.npz
 
 # ── Data / datasets ─────────────────────────────────────────────────────────
 data/
 datasets/
 
 # ── 3dgrut / OptiX compiled plugin ──────────────────────────────────────────
-# Place the 3dgrut repo here manually; it is not tracked (too large).
-# Only the empty placeholder 3dgrut/.gitkeep is committed.
-3dgrut/*
-!3dgrut/.gitkeep
+# Downloaded by setup.sh. Ignore the entire nested repository so Git cannot
+# accidentally stage it as an embedded repository or gitlink.
+3dgrut/
 optix_integration/__pycache__/
 *.ninja
 *.ninja_log
 
 # ── PyTorch extensions cache ─────────────────────────────────────────────────
-~/.cache/torch_extensions/
+.cache/
+torch_extensions/
 
 # ── DearPyGui / UI state ────────────────────────────────────────────────────
 imgui.ini
@@ -73,6 +76,7 @@ imgui.ini
 *.tiff
 *.mp4
 *.avi
+*.webm
 
 # Allow demo and assets directories
 !demo/
@@ -101,9 +105,24 @@ Thumbs.db
 
 # ── Environment ─────────────────────────────────────────────────────────────
 .env
+.env.*
+!.env.example
 .venv/
 env/
 venv/
 
 # ── Conda env (keep YML spec, ignore the actual env folder) ─────────────────
 conda-env/
+
+# ── Test and analysis caches ────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ── Local credentials and machine-specific configuration ───────────────────
+*.pem
+*.key
+*.p12
+credentials.json

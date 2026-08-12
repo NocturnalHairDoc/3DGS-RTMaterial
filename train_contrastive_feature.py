@@ -26,7 +26,6 @@ import numpy as np
 
 import torch
 from torch import nn
-import pytorch3d.ops
 
 
 import time
@@ -303,6 +302,15 @@ def training(dataset, opt, pipe, iteration, saving_iterations, checkpoint_iterat
         feature_gaussians.optimizer.step()
         feature_gaussians.optimizer.zero_grad(set_to_none = True)
 
+        if iteration in checkpoint_iterations:
+            checkpoint_path = os.path.join(scene.model_path, f"feature_chkpnt{iteration}.pth")
+            torch.save({
+                "iteration": iteration,
+                "feature_gaussians": feature_gaussians.capture(),
+                "scale_gate": scale_gate.state_dict(),
+            }, checkpoint_path)
+            print(f"\n[ITER {iteration}] Saved feature checkpoint: {checkpoint_path}")
+
         iter_end.record()
 
         if iteration % 10 == 0:
@@ -324,7 +332,7 @@ def prepare_output_and_logger(args):
             unique_str=os.getenv('OAR_JOB_ID')
         else:
             unique_str = str(uuid.uuid4())
-        args.model_path = os.path.join("./output/", unique_str[0:10])
+        args.model_path = os.path.join("./output-v2/", unique_str[0:10])
         
     # Set up output folder
     print("Output folder: {}".format(args.model_path))

@@ -27,11 +27,11 @@ import numpy as np
 # Blinn-Phong coefficients per material type
 # (ambient, k_diffuse, k_specular, shininess)
 MATERIAL_PARAMS = {
-    "Default": (0.20, 0.80, 0.10,   8.0),
-    "Metal":   (0.25, 0.30, 0.75,  64.0),
-    "Glass":   (0.20, 0.15, 0.80, 128.0),
-    "Plastic": (0.20, 0.70, 0.30,  16.0),
-    "Matte":   (0.25, 0.90, 0.00,   1.0),
+    "Default": (0.20, 0.80, 0.20,  32.0),
+    "Metal":   (0.05, 0.35, 4.50,  80.0),
+    "Glass":   (0.04, 0.20, 5.50, 200.0),
+    "Plastic": (0.15, 0.85, 0.60,  28.0),
+    "Matte":   (0.30, 0.70, 0.00,   1.0),
 }
 
 

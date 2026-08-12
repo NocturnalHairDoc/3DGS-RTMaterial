@@ -2,7 +2,10 @@
 
 > Semester project for **SFU CMPT 743** (Visual Computing).
 
-An interactive viewer that combines **3D Gaussian Splatting** segmentation (SAGA) with **OptiX ray-traced normals** and **per-segment Blinn-Phong material shading**.  Segments are assigned physical material types (Metal, Glass, Plastic, Matte) and rendered with physically-motivated BRDFs driven by true ray-traced surface normals from NVIDIA's 3DGRT tracer.
+This project combines **3D Gaussian Splatting** segmentation (SAGA), **OptiX
+ray tracing**, and per-segment edits to spherical-harmonic (SH) colour and
+opacity. The material presets are stylized edits rather than a full PBR
+decomposition; lighting remains baked into the learned SH coefficients.
 
 ---
 
@@ -30,27 +33,32 @@ An interactive viewer that combines **3D Gaussian Splatting** segmentation (SAGA
   - *RGB (Baseline)* — standard 3DGS splatting render
   - *Segmentation* — per-segment color overlay
   - *Material* — flat material-type color preview
-  - *Ray-Tracing* — full Blinn-Phong shading with OptiX normals
+  - *Ray-Tracing* — OptiX rendering with temporary per-segment SH/opacity edits
 
 - **Ray-Tracing Sub-modes** (selectable in the RT panel)
-  - *Material* — per-segment physically shaded render
-  - *Depth* — false-color depth visualization
-  - *Normals* — world-space surface normal visualization
+  - *Material (SH+RT)* — SH-edited material result rendered with OptiX
+  - *Original* — unedited OptiX render
+  - *Compare* — original and edited render side by side
 
 - **OptiX / 3DGRT Integration**
   - BVH built once from the loaded Gaussian model
   - Per-frame ray tracing returns RGB, surface normals, depth, and opacity
-  - Graceful fallback to depth-rasterizer normals when OptiX is unavailable
+  - Visible fallback status and error reason when OptiX is unavailable
+  - Depth-rasterizer normals used by the fallback path
+  - Camera-space rays are transformed exactly once by 3DGRT, keeping the
+    raster and OptiX viewpoints aligned
+  - Adaptive interaction uses rasterization while dragging and settles to a
+    full OptiX frame after release
 
-- **Material System** — 5 material types with independent Blinn-Phong parameters
+- **Material System** — 5 presets that alter SH colour, view-dependent SH terms, and opacity
 
-  | Material | Ambient | Diffuse | Specular | Shininess | Albedo |
-  |----------|---------|---------|----------|-----------|--------|
-  | Default  | 0.10 | 0.70 | 0.20 |  16 | scene SH color |
-  | Metal    | 0.05 | 0.15 | 1.50 | 128 | silver-grey |
-  | Glass    | 0.05 | 0.08 | 1.80 | 256 | sky blue |
-  | Plastic  | 0.10 | 0.70 | 0.50 |  32 | red |
-  | Matte    | 0.12 | 1.00 | 0.00 |   1 | warm beige |
+  | Material | DC/base colour | Higher-order SH | Opacity |
+  |----------|----------------|-----------------|---------|
+  | Default  | unchanged | unchanged | unchanged |
+  | Metal    | 95% desaturated | ×1.5 | unchanged |
+  | Glass    | subtle cool tint | unchanged | ×0.28 |
+  | Plastic  | saturation ×1.5 | ×0.15 | unchanged |
+  | Matte    | unchanged | zeroed | unchanged |
 
 - **Segmentation**
   - Click-mode (single / multi-click) with CLIP feature similarity
@@ -59,54 +67,65 @@ An interactive viewer that combines **3D Gaussian Splatting** segmentation (SAGA
   - SAM-driven 2D→3D projection (optional)
   - Save / load segment masks
 
-- **CLIP Material Detection** — enter a text prompt (e.g. `"shiny gold"`) to auto-assign a material type to the selected segment
+- **CLIP Material Panel** — classifies a rendered crop of the selected segment against material text prompts, or converts prompts such as `"blue glass"` and `"brushed metal"` into continuous SH/opacity parameters
 
-- **Configurable Lighting** — azimuth and elevation sliders control the directional light in world space
+- **Project State** — saves and restores the complete segmentation mask, material names/parameters, hidden segments, camera pose, and relevant UI settings in a compressed `.npz`
+
+- **Offline Export** — background PNG/MP4/PNG-sequence export with progress,
+  cancellation, tiled 4K/8K rendering and RGB/RGBA/depth/normals/ID/comparison channels
 
 ---
 
 ## Requirements
 
-- NVIDIA GPU with CUDA 12.x driver
+- NVIDIA GPU with a current CUDA 12.x driver (CUDA 12.8+ recommended for RTX 50-series)
 - Linux (tested on Ubuntu 22.04)
 - Conda / Miniconda
 
-OptiX SDK is **not** required at runtime — stubs are bundled inside `3dgrut/`.
+OptiX SDK is **not** required at runtime; `setup.sh` downloads 3DGRT, which includes the required development headers.
 
 ---
 
 ## Installation
 
 ```bash
-git clone <this-repo> --recurse-submodules
+git clone git@github.com:NocturnalHairDoc/3DGS-RTMaterial.git
 cd 3DGS-RTMaterial
+conda env create -f environment.yml
+conda activate gaussian_splatting_v2
 bash setup.sh
 ```
 
 `setup.sh` does the following automatically:
 
-1. Creates the `gaussian_splatting` conda environment from `environment.yml`
-2. Builds the 3DGS CUDA rasterizer submodules (`diff-gaussian-rasterization`, `simple-knn`, …)
-3. Installs the `threedgrut` and `threedgrt_tracer` packages from `3dgrut/`
+1. Verifies that `gaussian_splatting_v2` is active
+2. Downloads the SAGA CUDA rasterizer sources into the ignored `submodules/` directory
+3. Downloads 3DGRT into the ignored `3dgrut/` directory
+4. Builds the rasterizers and a PyTorch-version-compatible PyTorch3D, then installs `threedgrut` / `threedgrt_tracer`
+5. Runs `runtime_check.py`, including a GPU architecture compatibility check
 
 ### Manual install (if `setup.sh` fails)
 
 ```bash
 conda env create -f environment.yml
-conda activate gaussian_splatting
+conda activate gaussian_splatting_v2
 
-# 3DGS CUDA submodules
+# First fetch the SAGA and 3DGRT sources, or let setup.sh do this automatically.
+# 3DGS CUDA rasterizers
+python patch_cuda_sources.py
 pip install submodules/diff-gaussian-rasterization/ --no-build-isolation
 pip install submodules/diff-gaussian-rasterization_contrastive_f/ --no-build-isolation
 pip install submodules/diff-gaussian-rasterization-depth/ --no-build-isolation
 pip install submodules/simple-knn/ --no-build-isolation
+pip install --no-build-isolation --no-deps \
+  git+https://github.com/facebookresearch/pytorch3d.git@9381c4016376345bb795b97c45a6c2de66db354a
 
 # 3DGRT / OptiX
+python patch_3dgrut_sources.py
 pip install -e 3dgrut/
-pip install -e 3dgrut/threedgrt_tracer/
 
 # Extra Python dependencies
-pip install imageio einops slangtorch==1.3.4 "setuptools<80"
+pip install imageio einops slangtorch==1.3.18 "setuptools<80"
 ```
 
 ---
@@ -114,20 +133,36 @@ pip install imageio einops slangtorch==1.3.4 "setuptools<80"
 ## Usage
 
 ```bash
-conda activate gaussian_splatting
-python rt_gs_gui.py -m ./output/<scene_name>
+conda activate gaussian_splatting_v2
+python rt_gs_gui_sh_clip.py -m /absolute/model/path --scale 1.5
 ```
 
-The viewer expects a trained 3DGS scene at `./output/<scene_name>/` (COLMAP format with a `point_cloud/` directory).
+If `-m` is omitted, the viewer selects the first compatible scene under
+`output/`.
+
+The viewer expects a trained 3DGS scene with both the iteration-30000 scene
+PLY and iteration-10000 contrastive feature PLY/scale gate. Model output is
+intentionally not stored in Git.
+
+### Diagnostics and tests
+
+```bash
+python runtime_check.py
+python -m unittest discover -s tests -v
+```
+
+`runtime_check.py` checks the Python dependencies, CUDA runtime, GPU
+architecture and downloaded source trees. The CPU-safe tests also run in
+GitHub Actions. OptiX tests require an NVIDIA GPU and a trained scene.
 
 ### Training a scene (from scratch)
 
 ```bash
 # 1. Train the base 3DGS scene
-python train_scene.py -s <data_dir> -m output/<scene_name>
+python train_scene.py -s <data_dir> -m ./output-v2/<scene_name>
 
 # 2. Train contrastive CLIP features for segmentation
-python train_contrastive_feature.py -s <data_dir> -m output/<scene_name>
+python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 ```
 
 ---
@@ -143,6 +178,9 @@ python train_contrastive_feature.py -s <data_dir> -m output/<scene_name>
 | Confirm segment | *Confirm & hide* button |
 | Roll back last segment | *Roll back* button |
 | Clear all segments | *Clear all* button |
+| Save/load complete editing state | *Project & Export → Save/Load project* |
+| Export high-resolution still | *Project & Export → Export PNG* |
+| Export 360° turntable | *Project & Export → Export turntable MP4* |
 
 ---
 
@@ -150,7 +188,8 @@ python train_contrastive_feature.py -s <data_dir> -m output/<scene_name>
 
 ```
 3DGS-RTMaterial/
-├── rt_gs_gui.py               # Main viewer (entry point)
+├── rt_gs_gui_sh_clip.py       # Main SH-material + CLIP viewer (entry point)
+├── rt_gs_gui.py               # Shared base viewer and Blinn-Phong alternative
 ├── saga_gui.py                # Original SAGA GUI (segmentation only)
 ├── optix_integration/         # OptiX / 3DGRT integration module
 │   ├── optix_renderer.py      #   BVH build + per-frame ray trace
@@ -159,12 +198,18 @@ python train_contrastive_feature.py -s <data_dir> -m output/<scene_name>
 │   ├── material_compositor.py #   Blinn-Phong shading on ray-traced normals
 │   └── build_plugin.py        #   Compiles the 3DGRT Slang/CUDA plugin
 ├── material_sh_edit/          # SH-based material editor utilities
-├── 3dgrut/                    # NVIDIA 3DGRT library (submodule)
+├── render_policy.py           # Interactive raster/OptiX and camera policy
+├── export_manager.py          # Background export worker and status queue
+├── project_state.py           # Versioned state persistence and migration
+├── undo_manager.py            # Bounded lightweight undo/redo history
+├── 3dgrut/                    # NVIDIA 3DGRT source downloaded by setup.sh
 ├── scene/                     # Scene + GaussianModel classes
 ├── gaussian_renderer/         # 3DGS CUDA rasterizer wrappers
-├── submodules/                # diff-gaussian-rasterization, simple-knn, …
+├── submodules/                # downloaded by setup.sh; not stored in Git
 ├── demo/                      # Screenshots and demo video
-├── environment.yml            # Conda environment spec
+├── runtime_check.py           # dependency/GPU architecture diagnostics
+├── tests/                     # Automated tests
+├── environment.yml            # Conda environment specification
 └── setup.sh                   # One-shot environment setup
 ```
 
@@ -173,10 +218,26 @@ python train_contrastive_feature.py -s <data_dir> -m output/<scene_name>
 ## Known Issues / Limitations
 
 - The 3DGRT OptiX plugin compiles Slang/CUDA kernels on **first run** — this takes 1–3 minutes. Subsequent runs use the cached binary.
-- `slangtorch >= 1.3.5` is incompatible with the current kernel sources; pin to `1.3.4`.
+- 3DGRT commit `a37ef721` requires the Slang pointer-access API; pin SlangTorch to `1.3.18`.
 - `setuptools >= 80` removes `pkg_resources`; pin to `< 80`.
-- Python 3.10 is required (3DGRT was originally 3.11-only; `setup.py` has been patched).
-- Material shading is skipped during camera drag for interactive frame rates; full shading resumes when the camera stops.
+- Python 3.10 is required by this environment.
+- Interactive RT intentionally uses a rasterized material preview during camera drag; a full OptiX frame replaces it on release.
+- The main material system edits learned SH/opacity values; it is not physically complete PBR and has no BRDF recovery, true refraction, environment relighting, or inter-object shadow casting.
+- Segmentation errors and overlapping Gaussians can cause material bleeding at object boundaries.
+- Trained scenes are not included in the repository.
+- Changing hidden segments rebuilds the OptiX BVH once; subsequent frames reuse the filtered BVH. Large scenes may briefly pause on the first frame after a visibility change.
+- MP4 dimensions must be even. Very large exports still require enough VRAM for one tile and the scene BVH.
+
+### Interactive preview setting
+
+Adaptive raster preview can be disabled when profiling full OptiX interaction:
+
+```bash
+export RTM_ADAPTIVE_RT_PREVIEW=0
+```
+
+The same setting is available in the Ray-Tracing panel. The corrected OptiX
+camera transform is now the only supported camera path.
 
 ---
 
@@ -186,3 +247,9 @@ python train_contrastive_feature.py -s <data_dir> -m output/<scene_name>
 - [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)
 - [NVIDIA 3DGRT / threedgrut](https://github.com/nv-tlabs/3dgrut)
 - [CLIP](https://github.com/openai/CLIP)
+
+## License
+
+Project-authored code is available under Apache-2.0. Derived research
+components retain their upstream terms, including the non-commercial
+restrictions in the original 3DGS source headers. See `LICENSE.md` for details.

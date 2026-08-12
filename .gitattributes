@@ -1,0 +1,16 @@
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webm binary
+*.mp4 binary
+*.pdf binary
+*.ply binary
+*.pth binary
+*.pt binary
+*.npz binary
+
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf

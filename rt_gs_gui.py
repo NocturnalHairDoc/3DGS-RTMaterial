@@ -47,6 +47,8 @@ except Exception as _optix_import_err:
     OPTIX_INTEGRATION_AVAILABLE = False
     OptiXRenderer = None
     MaterialCompositor = None
+else:
+    _optix_import_err = None
 
 # Keyword -> material type mapping for auto semantic-to-material assignment
 KEYWORD_MATERIAL_MAP = [
@@ -199,6 +201,8 @@ class RTGSViewerGUI:
         self.height = opt.height
         self.window_width = opt.window_width
         self.window_height = opt.window_height
+        self.control_width = opt.control_width
+        self.control_height = opt.control_height
         self.camera = OrbitCamera(opt.width, opt.height, r=opt.radius)
 
         bg_color = [1, 1, 1] if opt.white_background else [0, 0, 0]
@@ -277,6 +281,7 @@ class RTGSViewerGUI:
         # OptiX 3DGRT renderer (initialized after model is loaded into GPU)
         self._optix_renderer = None
         self._material_compositor = None
+        self._backend_error = None
         if OPTIX_INTEGRATION_AVAILABLE:
             try:
                 self._optix_renderer = OptiXRenderer(
@@ -291,9 +296,11 @@ class RTGSViewerGUI:
                     self._material_compositor = MaterialCompositor()
                     print("OptiX 3DGRT: ready (true ray tracing active).")
                 else:
+                    self._backend_error = "3DGRT tracer unavailable"
                     print("OptiX 3DGRT: plugin not compiled — run build_plugin.py. "
                           "Falling back to Blinn-Phong.")
             except Exception as _e:
+                self._backend_error = str(_e)
                 print(f"OptiX renderer init failed: {_e}")
                 self._optix_renderer = None
 
@@ -629,6 +636,9 @@ class RTGSViewerGUI:
                     normals = torch.where(flip, -normals_cam, normals_cam)
                     rgb = optix_out["rgb"].permute(2, 0, 1)  # (3, H, W)
             except Exception as e:
+                self._backend_error = str(e)
+                if dpg.does_item_exist("_optix_status"):
+                    dpg.set_value("_optix_status", f"Backend: rasterizer fallback ({e})")
                 print(f"OptiX render failed: {e}, falling back to rasterizer")
 
         if rgb is None:
@@ -1239,7 +1249,7 @@ class RTGSViewerGUI:
                                    callback=lambda: setattr(self, 'clear_edit', True))
 
             # --- Material section ---
-            with dpg.collapsing_header(label="Material", default_open=False):
+            with dpg.collapsing_header(label="Material", default_open=False, tag="_material_header"):
                 dpg.add_combo(tag="_material_segment_select", items=["(No segment)"],
                               default_value="(No segment)",
                               callback=lambda s, v: self._on_material_segment_select(v))
@@ -1262,11 +1272,14 @@ class RTGSViewerGUI:
                         dpg.add_text("Backend: OptiX 3DGRT (true ray tracing)",
                                      color=[100, 220, 100], tag="_optix_status")
                     elif OPTIX_INTEGRATION_AVAILABLE:
-                        dpg.add_text("Backend: Blinn-Phong (OptiX plugin not compiled)",
-                                     color=[220, 160, 60], tag="_optix_status")
+                        reason = self._backend_error or "3DGRT tracer unavailable"
+                        dpg.add_text(f"Backend: rasterizer fallback ({reason})",
+                                     color=[220, 160, 60], tag="_optix_status",
+                                     wrap=self.control_width - 20)
                     else:
-                        dpg.add_text("Backend: Blinn-Phong (optix_integration unavailable)",
-                                     color=[200, 100, 100], tag="_optix_status")
+                        dpg.add_text(f"Backend: rasterizer fallback ({_optix_import_err})",
+                                     color=[200, 100, 100], tag="_optix_status",
+                                     wrap=self.control_width - 20)
 
                     rt_items = ["Material", "Depth", "Normals"]
                     if not DEPTH_RENDER_AVAILABLE and not _optix_ready:
@@ -1326,7 +1339,11 @@ class RTGSViewerGUI:
 
     def render(self):
         while dpg.is_dearpygui_running():
-            if self.load_model and self._should_update():
+            poll_exports = getattr(self, "_poll_export_events", None)
+            if poll_exports is not None:
+                poll_exports()
+            export_busy = getattr(getattr(self, "_export_manager", None), "running", False)
+            if self.load_model and not export_busy and self._should_update():
                 cam = self._construct_camera()
                 self.fetch_data(cam)
             dpg.render_dearpygui_frame()
@@ -1335,7 +1352,8 @@ class RTGSViewerGUI:
 
 def main():
     parser = ArgumentParser(description="Ray-Tracing 3D Gaussian Viewer (modular)")
-    parser.add_argument("-m", "--model_path", type=str, default="./output/figurines")
+    parser.add_argument("-m", "--model_path", type=str, default=None,
+                        help="Trained scene directory. If omitted, use the first valid scene in ./output.")
     parser.add_argument("-f", "--feature_iteration", type=int, default=10000)
     parser.add_argument("-s", "--scene_iteration", type=int, default=30000)
     parser.add_argument("--scale", type=float, default=2.0,
@@ -1351,7 +1369,33 @@ def main():
     opt.control_width = int(350 * (2 / opt.r))
     opt.control_height = int(700 * (2 / opt.r))
     opt.font_size = min(28, max(16, int(18 * (2 / opt.r))))
-    opt.MODEL_PATH = args.model_path
+    model_path = args.model_path
+    if model_path is None:
+        output_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        candidates = []
+        if os.path.isdir(output_root):
+            for entry in sorted(os.listdir(output_root)):
+                candidate = os.path.join(output_root, entry)
+                scene_ply = os.path.join(
+                    candidate, "point_cloud", f"iteration_{args.scene_iteration}",
+                    "scene_point_cloud.ply",
+                )
+                feature_ply = os.path.join(
+                    candidate, "point_cloud", f"iteration_{args.feature_iteration}",
+                    "contrastive_feature_point_cloud.ply",
+                )
+                scale_gate = os.path.join(
+                    candidate, "point_cloud", f"iteration_{args.feature_iteration}",
+                    "scale_gate.pt",
+                )
+                if all(os.path.isfile(p) for p in (scene_ply, feature_ply, scale_gate)):
+                    candidates.append(candidate)
+        if not candidates:
+            parser.error("no valid trained scene found under ./output; pass -m MODEL_PATH")
+        model_path = candidates[0]
+        print(f"No model path supplied; using {model_path}")
+
+    opt.MODEL_PATH = model_path
     opt.FEATURE_GAUSSIAN_ITERATION = args.feature_iteration
     opt.SCENE_GAUSSIAN_ITERATION = args.scene_iteration
 
