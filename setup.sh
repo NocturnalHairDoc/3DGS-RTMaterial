@@ -41,7 +41,7 @@ if [[ ! -f "$REPO_DIR/submodules/diff-gaussian-rasterization/setup.py" ]]; then
 fi
 
 echo "=== [3/5] Installing 3DGS CUDA rasterizers ==="
-python "$REPO_DIR/patch_cuda_sources.py"
+python "$REPO_DIR/tools/setup/patch_cuda_sources.py"
 for package in \
     diff-gaussian-rasterization \
     diff-gaussian-rasterization_contrastive_f \
@@ -61,11 +61,11 @@ if [[ ! -f "$REPO_DIR/3dgrut/threedgrt_tracer/dependencies/optix-dev/include/opt
     git -C "$REPO_DIR/3dgrut" submodule update --init --depth 1 \
         threedgrt_tracer/dependencies/optix-dev
 fi
-python "$REPO_DIR/patch_3dgrut_sources.py"
+python "$REPO_DIR/tools/setup/patch_3dgrut_sources.py"
 python -m pip install -e "$REPO_DIR/3dgrut/"
 
 echo "=== [5/5] Verifying runtime ==="
-python "$REPO_DIR/runtime_check.py"
+python "$REPO_DIR/tools/runtime_check.py"
 
 echo
 echo "Installation complete. Activate with: conda activate gaussian_splatting_v2"

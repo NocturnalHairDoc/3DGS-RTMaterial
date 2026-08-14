@@ -15,13 +15,13 @@ import imageio.v2 as imageio
 import numpy as np
 import torch
 
-from export_manager import linear_to_srgb
+from viewer.export_manager import linear_to_srgb
 from optix_integration import OptiXRenderer
 from rt_gs_gui import OrbitCamera
 from scene import GaussianModel
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _scene_ply(model: Path, iteration: int | None) -> Path:

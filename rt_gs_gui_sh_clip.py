@@ -6,7 +6,7 @@ appearance, then restore after rendering.
 
 Changes from rt_gs_gui.py
 --------------------------
-- Adds MaterialSHEditor (material_sh_edit/) after model load.
+- Adds MaterialSHEditor (materials/) after model load.
 - Replaces the Blinn-Phong post-processing pipeline in _render_raytracing
   with a simple: apply-SH-edits → render → restore cycle.
 - Keeps all segmentation, CLIP, camera, and UI logic unchanged (inherited).
@@ -56,27 +56,28 @@ import imageio.v2 as imageio
 from argparse import ArgumentParser
 from scipy.spatial.transform import Rotation
 
-from rt_gs_gui import RTGSViewerGUI, RTGSConfig, KEYWORD_MATERIAL_MAP
+from rt_gs_gui import RTGSViewerGUI, RTGSConfig
 from scene import GaussianModel, FeatureGaussianModel
 from gaussian_renderer import render
 
-from material_sh_edit import MaterialSHEditor
+from materials import MaterialSHEditor
 from optix_integration import OptiXRenderer
-from project_state import load_project_state, save_project_state
-from export_manager import (ExportCancelled, ExportManager, capture_export_snapshot,
-                            compose_depth_ordered_ids, estimate_frame_bytes, linear_to_srgb)
-from undo_manager import UndoManager
-from render_policy import InteractiveRenderPolicy
+from viewer.project_state import load_project_state, save_project_state
+from viewer.export_manager import (ExportCancelled, ExportManager, capture_export_snapshot,
+                                   compose_depth_ordered_ids, estimate_frame_bytes,
+                                   linear_to_srgb)
+from viewer.undo_manager import UndoManager
+from viewer.render_policy import InteractiveRenderPolicy
 from clip_utils.material_clip import (
     aggregate_multiview_scores,
     masked_original_rgb_crop,
     params_from_text_prompt,
+    score_crop_against_material_prompts,
     select_confident_material,
     topk_materials,
     MATERIAL_PARAM_PRESETS,
-    MATERIAL_CLIP_PROMPTS,
 )
-from viewer_utils import scoped_output_path, visibility_cache_key
+from viewer.utils import scoped_output_path, visibility_cache_key
 
 
 class SHMaterialViewer(RTGSViewerGUI):
@@ -830,7 +831,7 @@ class SHMaterialViewer(RTGSViewerGUI):
         self._sh_editor.restore()
         point_mask_color = feat_mask.float().unsqueeze(1).expand(-1, 3)
         mask_bg = torch.zeros(3, device="cuda", dtype=torch.float32)
-        image_features = []
+        per_view_scores = []
         # Three independent views centred on the current view. The GUI camera
         # itself is never changed, and edited/material buffers are never read.
         for yaw_degrees in (-10.0, 0.0, 10.0):
@@ -846,21 +847,11 @@ class SHMaterialViewer(RTGSViewerGUI):
                 crop = masked_original_rgb_crop(original_rgb, mask_image).unsqueeze(0)
             except ValueError:
                 continue
-            feature = clip_net.encode_image(crop).float()
-            image_features.append(feature / (feature.norm(dim=-1, keepdim=True) + 1e-6))
-        if not image_features:
+            per_view_scores.append(score_crop_against_material_prompts(clip_net, crop))
+        if not per_view_scores:
             self._set_io_status(f"Segment {seg_id} is not visible in sampled views", error=True)
             return
 
-        per_view_scores = []
-        for image_feat in image_features:
-            view_scores = {}
-            for mat_name, prompts in MATERIAL_CLIP_PROMPTS.items():
-                tokens = torch.cat([clip_net.tokenizer(p) for p in prompts]).to(image_feat.device)
-                text_feats = clip_net.model.encode_text(tokens).float()
-                text_feats = text_feats / (text_feats.norm(dim=-1, keepdim=True) + 1e-6)
-                view_scores[mat_name] = float((image_feat @ text_feats.T).mean().item())
-            per_view_scores.append(view_scores)
         scores = aggregate_multiview_scores(per_view_scores)
 
         # Update score labels in UI

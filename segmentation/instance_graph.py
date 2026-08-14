@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from scipy.spatial import cKDTree
 
-from segmentation_utils import DisjointSet
+from .utils import DisjointSet
 
 
 @dataclass

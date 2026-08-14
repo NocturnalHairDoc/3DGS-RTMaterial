@@ -2,13 +2,10 @@ import torch
 
 
 import numpy as np
-from matplotlib import pyplot as plt
-from PIL import Image
 from argparse import ArgumentParser, Namespace
-import cv2
 
 from arguments import ModelParams, PipelineParams
-from scene import Scene, GaussianModel, FeatureGaussianModel
+from scene import Scene, GaussianModel
 
 import gaussian_renderer
 import importlib

@@ -7,7 +7,7 @@ import importlib
 import os
 import sys
 
-REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 THREEDGRUT_ROOT = os.path.join(REPO_ROOT, "3dgrut")
 if THREEDGRUT_ROOT not in sys.path:
     sys.path.insert(0, THREEDGRUT_ROOT)

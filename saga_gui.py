@@ -1,27 +1,16 @@
 # Borrowed from OmniSeg3D-GS (https://github.com/OceanYing/OmniSeg3D-GS)
 import torch
-from scene import Scene
 import os
-from tqdm import tqdm
-from os import makedirs
 from gaussian_renderer import render, render_contrastive_feature
-import torchvision
-from utils.general_utils import safe_state
 from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams, get_combined_args
-# from gaussian_renderer import GaussianModel
 import numpy as np
-from PIL import Image
-import colorsys
 import cv2
-from sklearn.decomposition import PCA
 
-# from scene.gaussian_model import GaussianModel
-from scene import Scene, GaussianModel, FeatureGaussianModel
+from scene import GaussianModel, FeatureGaussianModel
 import dearpygui.dearpygui as dpg
 import math
 from scene.cameras import Camera
-from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
+from utils.graphics_utils import focal2fov, fov2focal
 
 from scipy.spatial.transform import Rotation as R
 

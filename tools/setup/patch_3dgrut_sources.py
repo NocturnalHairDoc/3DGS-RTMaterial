@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parent / "3dgrut"
+    root = Path(__file__).resolve().parents[2] / "3dgrut"
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
         source = pyproject.read_text()
