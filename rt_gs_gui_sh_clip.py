@@ -35,6 +35,16 @@ Usage
     python rt_gs_gui_sh_clip.py -m ./output/bicycle --scale 1.5
 """
 
+# Keep --help available without importing CUDA/GUI dependencies.
+if __name__ == "__main__":
+    import sys as _early_sys
+    if any(arg in {"-h", "--help"} for arg in _early_sys.argv[1:]):
+        from argparse import ArgumentParser as _EarlyArgumentParser
+        _early_parser = _EarlyArgumentParser(description="3DGS SH material viewer")
+        _early_parser.add_argument("-m", "--model_path", help="trained model directory")
+        _early_parser.print_help()
+        raise SystemExit(0)
+
 import os
 import copy
 import io
@@ -52,8 +62,9 @@ from gaussian_renderer import render
 
 from material_sh_edit import MaterialSHEditor
 from optix_integration import OptiXRenderer
-from project_state import load_project_state, model_fingerprint, save_project_state
-from export_manager import ExportCancelled, ExportManager, estimate_frame_bytes, linear_to_srgb
+from project_state import load_project_state, save_project_state
+from export_manager import (ExportCancelled, ExportManager, capture_export_snapshot,
+                            compose_depth_ordered_ids, estimate_frame_bytes, linear_to_srgb)
 from undo_manager import UndoManager
 from render_policy import InteractiveRenderPolicy
 from clip_utils.material_clip import (
@@ -65,6 +76,7 @@ from clip_utils.material_clip import (
     MATERIAL_PARAM_PRESETS,
     MATERIAL_CLIP_PROMPTS,
 )
+from viewer_utils import scoped_output_path, visibility_cache_key
 
 
 class SHMaterialViewer(RTGSViewerGUI):
@@ -99,8 +111,8 @@ class SHMaterialViewer(RTGSViewerGUI):
     def _visible_gaussian_mask(self):
         """Return a cached OptiX inclusion mask for the current hidden segments."""
         scene_mask = self.engine["scene"]._mask
-        key = (tuple(sorted(self.hidden_segments)), scene_mask.data_ptr(),
-               getattr(scene_mask, "_version", 0), int(self.engine["scene"].segment_times))
+        key = visibility_cache_key(
+            self.hidden_segments, scene_mask, self.engine["scene"].segment_times)
         if key == self._visibility_cache_key:
             return self._visibility_cache
         hide = self._get_hide_mask()
@@ -202,9 +214,6 @@ class SHMaterialViewer(RTGSViewerGUI):
         return {
             "model_path": os.path.abspath(self.opt.MODEL_PATH),
             "model_name": os.path.basename(os.path.normpath(self.opt.MODEL_PATH)),
-            "model_fingerprint": model_fingerprint(
-                self.opt.MODEL_PATH, self.opt.SCENE_GAUSSIAN_ITERATION,
-                self.opt.FEATURE_GAUSSIAN_ITERATION),
             "scene_iteration": int(self.opt.SCENE_GAUSSIAN_ITERATION),
             "feature_iteration": int(self.opt.FEATURE_GAUSSIAN_ITERATION),
             "point_count": int(self.engine["scene"].get_xyz.shape[0]),
@@ -224,11 +233,7 @@ class SHMaterialViewer(RTGSViewerGUI):
 
     @staticmethod
     def _scoped_path(path, directory):
-        root = os.path.realpath(os.path.join(os.path.dirname(__file__), directory))
-        resolved = os.path.realpath(os.path.abspath(path))
-        if os.path.commonpath([root, resolved]) != root:
-            raise ValueError(f"path must be inside {root}")
-        return resolved
+        return scoped_output_path(path, directory, __file__)
 
     def _save_project(self):
         path = dpg.get_value("_project_state_path").strip()
@@ -248,31 +253,20 @@ class SHMaterialViewer(RTGSViewerGUI):
         try:
             path = self._scoped_path(path, "segmentation_res")
             mask, metadata = load_project_state(path)
-            expected_fingerprint = model_fingerprint(
-                self.opt.MODEL_PATH, self.opt.SCENE_GAUSSIAN_ITERATION,
-                self.opt.FEATURE_GAUSSIAN_ITERATION)
-            saved_fingerprint = metadata.get("model_fingerprint")
             absolute_path = os.path.abspath(path)
             if self._pending_state_load != absolute_path:
-                warning = (" FINGERPRINT MISMATCH; load will be rejected."
-                           if saved_fingerprint and saved_fingerprint != expected_fingerprint else "")
                 self._pending_state_load = absolute_path
                 if dpg.does_item_exist("_load_project_button"):
                     dpg.configure_item("_load_project_button", label="Confirm load")
                 self._set_io_status(
                     f"State summary: model={metadata.get('model_name', '?')}, "
                     f"points={mask.shape[0]}, saved={metadata.get('saved_at', '?')}, "
-                    f"materials={len(metadata.get('material_assignments', {}))}."
-                    f"{warning} Click Confirm load to continue.", error=bool(warning))
+                    f"materials={len(metadata.get('material_assignments', {}))}. "
+                    "Click Confirm load to continue.")
                 return
             self._pending_state_load = None
             if dpg.does_item_exist("_load_project_button"):
                 dpg.configure_item("_load_project_button", label="Load project")
-            if saved_fingerprint and saved_fingerprint != expected_fingerprint:
-                raise ValueError(
-                    f"model fingerprint mismatch: state={saved_fingerprint[:12]} "
-                    f"current={expected_fingerprint[:12]}"
-                )
             scene = self.engine["scene"]
             expected = int(scene.get_xyz.shape[0])
             if int(metadata.get("point_count", -1)) != expected or mask.shape[0] != expected:
@@ -407,9 +401,9 @@ class SHMaterialViewer(RTGSViewerGUI):
 
     # ─────────────────────────────── export ─────────────────────────────────
 
-    def _new_export_renderer(self, width, height):
+    def _new_export_renderer(self, width, height, scene=None):
         renderer = OptiXRenderer(
-            self.engine["scene"], width=width, height=height,
+            self.engine["scene"] if scene is None else scene, width=width, height=height,
             sh_degree=self.opt.sh_degree, bg_color=self.bg_color,
         )
         if not renderer.available:
@@ -417,16 +411,17 @@ class SHMaterialViewer(RTGSViewerGUI):
         return renderer
 
     @torch.no_grad()
-    def _render_export_output(self, renderer, camera, apply_materials=True, segment_mask=None):
-        edited = apply_materials and bool(self.material_assignments)
+    def _render_export_output(self, renderer, snapshot, editor,
+                              apply_materials=True, segment_mask=None):
+        edited = apply_materials and bool(snapshot.material_assignments)
         if edited:
-            self._sh_editor.apply_all(self.material_assignments, self.engine["scene"]._mask)
+            editor.apply_all(snapshot.material_assignments, snapshot.scene_mask)
         try:
-            mask = self._visible_gaussian_mask() if segment_mask is None else segment_mask
+            mask = snapshot.visible_mask if segment_mask is None else segment_mask
             if renderer.width * renderer.height > 1920 * 1080:
-                output = renderer.render_tiled(camera, tile_size=1024, segment_mask=mask)
+                output = renderer.render_tiled(snapshot.camera, tile_size=1024, segment_mask=mask)
             else:
-                output = renderer.render(camera, segment_mask=mask)
+                output = renderer.render(snapshot.camera, segment_mask=mask)
             if output is None:
                 raise RuntimeError("OptiX returned no frame")
             if any(not torch.isfinite(value).all() for value in output.values()):
@@ -434,36 +429,40 @@ class SHMaterialViewer(RTGSViewerGUI):
             return {key: value.float().cpu().numpy() for key, value in output.items()}
         finally:
             if edited:
-                self._sh_editor.restore()
+                editor.restore()
 
-    def _render_export_frame(self, renderer, camera):
-        return self._render_export_output(renderer, camera)["rgb"].clip(0, 1)
+    def _render_export_frame(self, renderer, snapshot, editor, camera):
+        frame_snapshot = copy.copy(snapshot)
+        object.__setattr__(frame_snapshot, "camera", camera)
+        return self._render_export_output(renderer, frame_snapshot, editor)["rgb"].clip(0, 1)
 
-    def _render_export_ids(self, renderer, camera, material=False):
-        scene_mask = self.engine["scene"]._mask
-        ids = np.zeros((renderer.height, renderer.width), dtype=np.uint16)
-        best = np.zeros_like(ids, dtype=np.float32)
-        material_ids = {sid: index + 1 for index, sid in enumerate(sorted(self.material_assignments))}
+    def _render_export_ids(self, renderer, snapshot, editor, material=False):
+        scene_mask = snapshot.scene_mask
+        material_ids = {sid: index + 1 for index, sid in enumerate(sorted(snapshot.material_assignments))}
+        layers = []
         for encoded in sorted(int(v) for v in torch.unique(scene_mask).tolist() if int(v) >= 2):
             segment_id = encoded - 1
-            if segment_id in self.hidden_segments:
+            if snapshot.visible_mask is not None and not bool(snapshot.visible_mask[scene_mask == encoded].any()):
                 continue
             value = material_ids.get(segment_id, 0) if material else segment_id
             if value == 0:
                 continue
             output = self._render_export_output(
-                renderer, camera, apply_materials=False, segment_mask=(scene_mask == encoded))
-            opacity = output["opacity"][..., 0]
-            replace = opacity > best
-            best[replace] = opacity[replace]
-            ids[replace] = value
-        return ids
+                renderer, snapshot, editor, apply_materials=False,
+                segment_mask=(scene_mask == encoded))
+            layers.append((value, output))
+        return compose_depth_ordered_ids(layers, renderer.height, renderer.width)
 
     def _selected_export_channel(self):
         return dpg.get_value("_export_channel") if dpg.does_item_exist("_export_channel") else "RGB"
 
-    def _write_export_image(self, path, renderer, camera, channel):
-        output = self._render_export_output(renderer, camera)
+    def _write_export_image(self, path, renderer, snapshot, editor, channel):
+        if channel == "Segmentation ID":
+            data = self._render_export_ids(renderer, snapshot, editor, material=False)
+        elif channel == "Material ID":
+            data = self._render_export_ids(renderer, snapshot, editor, material=True)
+        else:
+            output = self._render_export_output(renderer, snapshot, editor)
         if channel == "RGB":
             data = (linear_to_srgb(output["rgb"].clip(0, 1)) * 255 + 0.5).astype(np.uint8)
         elif channel == "RGBA":
@@ -475,12 +474,11 @@ class SHMaterialViewer(RTGSViewerGUI):
         elif channel == "Depth":
             path = os.path.splitext(path)[0] + ".tiff"
             data = output["depth"].astype(np.float32)
-        elif channel == "Segmentation ID":
-            data = self._render_export_ids(renderer, camera, material=False)
-        elif channel == "Material ID":
-            data = self._render_export_ids(renderer, camera, material=True)
+        elif channel in {"Segmentation ID", "Material ID"}:
+            pass
         elif channel == "Original / Edited":
-            original = self._render_export_output(renderer, camera, apply_materials=False)["rgb"]
+            original = self._render_export_output(
+                renderer, snapshot, editor, apply_materials=False)["rgb"]
             comparison = original.copy()
             comparison[:, renderer.width // 2:] = output["rgb"][:, renderer.width // 2:]
             data = (linear_to_srgb(comparison.clip(0, 1)) * 255 + 0.5).astype(np.uint8)
@@ -506,14 +504,18 @@ class SHMaterialViewer(RTGSViewerGUI):
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             estimate_mib = estimate_frame_bytes(width, height) / 1024**2
             self._set_io_status(f"Queued PNG {width}×{height}; estimated working buffers {estimate_mib:.0f} MiB")
-            camera = copy.deepcopy(self.camera)
+            snapshot = capture_export_snapshot(
+                self.engine["scene"], self.camera, self.material_assignments,
+                self.hidden_segments)
             channel = self._selected_export_channel()
             self._clip_network = None
             torch.cuda.empty_cache()
             def work(progress, cancelled):
-                renderer = self._cached_export_renderer(width, height)
+                renderer = self._new_export_renderer(width, height, snapshot.scene)
+                renderer.build_bvh()
+                editor = MaterialSHEditor(snapshot.scene)
                 if cancelled.is_set(): raise ExportCancelled("Export cancelled")
-                written = self._write_export_image(path, renderer, camera, channel)
+                self._write_export_image(path, renderer, snapshot, editor, channel)
                 progress(1)
             self._export_manager.start(1, work)
         except Exception as exc:
@@ -539,13 +541,18 @@ class SHMaterialViewer(RTGSViewerGUI):
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             estimate_mib = estimate_frame_bytes(width, height) / 1024**2
             self._set_io_status(f"Queued MP4 {width}×{height}; estimated working buffers {estimate_mib:.0f} MiB")
-            base = copy.deepcopy(self.camera)
+            snapshot = capture_export_snapshot(
+                self.engine["scene"], self.camera, self.material_assignments,
+                self.hidden_segments)
+            base = snapshot.camera
             self._clip_network = None
             torch.cuda.empty_cache()
             write_sequence = bool(dpg.get_value("_export_png_sequence"))
             sequence_dir = os.path.splitext(path)[0] + "_frames"
             def work(progress, cancelled):
-                renderer = self._cached_export_renderer(width, height)
+                renderer = self._new_export_renderer(width, height, snapshot.scene)
+                renderer.build_bvh()
+                editor = MaterialSHEditor(snapshot.scene)
                 if write_sequence: os.makedirs(sequence_dir, exist_ok=True)
                 with imageio.get_writer(path, fps=fps, codec="libx264", quality=8,
                                         macro_block_size=None) as writer:
@@ -554,7 +561,7 @@ class SHMaterialViewer(RTGSViewerGUI):
                         camera = copy.deepcopy(base)
                         angle = 2.0 * np.pi * index / frames
                         camera.rot = Rotation.from_rotvec(np.array([0.0, angle, 0.0])) * base.rot
-                        linear = self._render_export_frame(renderer, camera)
+                        linear = self._render_export_frame(renderer, snapshot, editor, camera)
                         writer.append_data((linear_to_srgb(linear) * 255 + 0.5).astype(np.uint8))
                         if write_sequence:
                             imageio.imwrite(os.path.join(sequence_dir, f"frame_{index:06d}.png"),
@@ -656,8 +663,7 @@ class SHMaterialViewer(RTGSViewerGUI):
             try:
                 self.engine["scene"].roll_back()
                 self.engine["feature"].roll_back()
-                st = self.engine["scene"].segment_times
-                self.hidden_segments = {sid for sid in self.hidden_segments if sid <= st}
+                self._prune_segment_state()
             except Exception:
                 pass
             self._dirty = True
@@ -709,13 +715,24 @@ class SHMaterialViewer(RTGSViewerGUI):
             dpg.set_value("_material_type_select", preset)
         self._set_material_params_ui(info.get("params") or MATERIAL_PARAM_PRESETS.get(preset))
 
+    def _replace_material_assignment(self, segment_id, assignment):
+        """Replace SH settings without discarding renderer-specific fields."""
+        previous = self.material_assignments.get(segment_id, {})
+        merged = {key: copy.deepcopy(value) for key, value in previous.items()
+                  if key not in {"type", "preset", "name", "params"}}
+        merged.update(assignment)
+        self.material_assignments[segment_id] = merged
+
     def _apply_material_assignment(self):
         seg_id = self._parse_segment_select_value(dpg.get_value("_material_segment_select"))
         if seg_id < 1: return
         name = str(dpg.get_value("_material_name_input") or f"Material_{seg_id}").strip()
         preset = dpg.get_value("_material_type_select")
-        self.material_assignments[seg_id] = {"type": "Custom", "preset": preset,
-                                             "name": name, "params": self._material_params_from_ui()}
+        self._replace_material_assignment(
+            seg_id,
+            {"type": "Custom", "preset": preset, "name": name,
+             "params": self._material_params_from_ui()},
+        )
         self.material_labels[seg_id] = name
         self._mat_map_dirty = self._dirty = True
         self._observe_history()
@@ -886,11 +903,11 @@ class SHMaterialViewer(RTGSViewerGUI):
 
         if prompt:
             params = params_from_text_prompt(prompt)
-            self.material_assignments[seg_id] = {
+            self._replace_material_assignment(seg_id, {
                 "type": "Custom",
                 "name": f"[CLIP] {prompt}",
                 "params": params,
-            }
+            })
             self.material_labels[seg_id] = f"[CLIP] {prompt}"
             self._mat_map_dirty = True
             self._dirty = True
@@ -899,7 +916,8 @@ class SHMaterialViewer(RTGSViewerGUI):
 
         elif self._clip_detected_material:
             mat = self._clip_detected_material
-            self.material_assignments[seg_id] = {"type": mat, "name": f"[CLIP→{mat}]"}
+            self._replace_material_assignment(
+                seg_id, {"type": mat, "name": f"[CLIP→{mat}]"})
             self.material_labels[seg_id] = f"[CLIP→{mat}]"
             self._mat_map_dirty = True
             self._dirty = True

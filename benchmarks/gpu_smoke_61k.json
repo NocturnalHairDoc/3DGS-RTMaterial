@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "scene": "smoke_scene/point_cloud/iteration_610/scene_point_cloud.ply",
+  "gaussian_count": 61380,
+  "resolution": [
+    160,
+    90
+  ],
+  "stable_frame_count": 10,
+  "timings_ms": {
+    "bvh_build": 33.518878997711,
+    "first_frame": 32.67174099892145,
+    "stable_mean": 8.936537100817077,
+    "stable_median": 8.872639500623336,
+    "stable_p95": 9.333309004432522,
+    "stable_min": 8.682822000992019,
+    "stable_max": 9.333309004432522
+  },
+  "stable_fps": 111.90016767328913,
+  "vram_mib": {
+    "peak_allocated": 32.732421875,
+    "peak_reserved": 54.0
+  },
+  "system": {
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "gpu_total_mib": 32088.5,
+    "python": "3.10.19",
+    "torch": "2.10.0+cu128",
+    "cuda_runtime": "12.8",
+    "cuda_capability": [
+      12,
+      0
+    ]
+  },
+  "validation": {
+    "finite_channels": true,
+    "nonempty_opacity": true
+  }
+}

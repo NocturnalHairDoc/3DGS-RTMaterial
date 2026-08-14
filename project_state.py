@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,30 +10,8 @@ from typing import Any
 import numpy as np
 
 
-STATE_VERSION = 2
-APPLICATION_VERSION = "2.0.0-dev"
-
-
-def model_fingerprint(model_path, scene_iteration=30000, feature_iteration=10000) -> str:
-    """Stable fingerprint of the model artifacts without loading large PLY files."""
-    root = Path(model_path).expanduser().resolve()
-    paths = [
-        root / "point_cloud" / f"iteration_{scene_iteration}" / "scene_point_cloud.ply",
-        root / "point_cloud" / f"iteration_{feature_iteration}" / "contrastive_feature_point_cloud.ply",
-        root / "point_cloud" / f"iteration_{feature_iteration}" / "scale_gate.pt",
-    ]
-    digest = hashlib.sha256()
-    for path in paths:
-        digest.update(path.name.encode())
-        if not path.is_file():
-            digest.update(b"missing")
-            continue
-        stat = path.stat()
-        digest.update(f"{stat.st_size}".encode())
-        with path.open("rb") as stream:
-            digest.update(stream.read(65536))
-    return digest.hexdigest()
-
+STATE_VERSION = 3
+APPLICATION_VERSION = "3.0.0-pbr-lite"
 
 def migrate_metadata(metadata: dict) -> dict:
     payload = dict(metadata)
@@ -42,11 +19,18 @@ def migrate_metadata(metadata: dict) -> dict:
     if version == 1:
         payload.setdefault("application_version", "1.x")
         payload.setdefault("saved_at", None)
-        payload.setdefault("model_fingerprint", None)
         for assignment in payload.get("material_assignments", {}).values():
             assignment.setdefault("params", None)
         payload["version"] = 2
         version = 2
+    if version == 2:
+        payload.setdefault("render_pipeline", "V2 Stylized")
+        payload.setdefault("environment_path", None)
+        payload.setdefault("pbr_exposure", 0.0)
+        for assignment in payload.get("material_assignments", {}).values():
+            assignment.setdefault("pbr", None)
+        payload["version"] = 3
+        version = 3
     if version != STATE_VERSION:
         raise ValueError(f"Unsupported project state version: {version}")
     return payload

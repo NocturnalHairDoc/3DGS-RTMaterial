@@ -12,6 +12,7 @@
 import torch
 import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
+from segmentation_utils import has_selected_points
 from torch import nn
 import os
 from utils.system_utils import mkdir_p
@@ -379,9 +380,9 @@ class GaussianModel:
         assert mask is not None
         mask = mask.squeeze()
         assert mask.shape[0] == self._xyz.shape[0], f"mask {mask.shape[0]} != xyz {self._xyz.shape[0]}"
-        if torch.count_nonzero(mask) == 0:
-            mask = ~mask
-            print("Seems like the mask is empty, segmenting the whole point cloud. Please run seg.py first.")
+        if not has_selected_points(mask):
+            print("Empty segmentation mask; no points were changed.")
+            return
 
         # Only mark points that are currently unsegmented (_mask==1)
         to_mark = mask & (self._mask == 1)

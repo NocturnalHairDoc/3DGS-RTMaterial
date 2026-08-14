@@ -1,0 +1,58 @@
+{
+  "datasets": {
+    "smoke_scene": {
+      "gaussians": 61380,
+      "resolution": [
+        618,
+        411
+      ],
+      "v22_stylized_mean_luminance": 0.3047315776348114,
+      "v3_mean_luminance": {
+        "dielectric": 0.40429219603538513,
+        "metal": 0.47390276193618774,
+        "glass": 0.33756792545318604
+      },
+      "v3_mean_full_frame_seconds": 0.08496465733818089,
+      "v3_estimated_fps": 11.769599635054684,
+      "shadow_mean_visibility": 0.34649303555488586,
+      "minimum_finite_fraction": 1.0
+    },
+    "bonsai": {
+      "gaussians": 1215289,
+      "resolution": [
+        390,
+        260
+      ],
+      "v22_stylized_mean_luminance": 0.28552693128585815,
+      "v3_mean_luminance": {
+        "dielectric": 0.402686208486557,
+        "metal": 0.4926949441432953,
+        "glass": 0.38952332735061646
+      },
+      "v3_mean_full_frame_seconds": 0.09636260399565799,
+      "v3_estimated_fps": 10.377469667019989,
+      "shadow_mean_visibility": 0.09465041011571884,
+      "minimum_finite_fraction": 1.0
+    },
+    "counter": {
+      "gaussians": 1070314,
+      "resolution": [
+        389,
+        260
+      ],
+      "v22_stylized_mean_luminance": 0.31438276171684265,
+      "v3_mean_luminance": {
+        "dielectric": 0.38316860795021057,
+        "metal": 0.4803968369960785,
+        "glass": 0.4264991581439972
+      },
+      "v3_mean_full_frame_seconds": 0.1447298646744457,
+      "v3_estimated_fps": 6.909423996556568,
+      "shadow_mean_visibility": 0.06688793748617172,
+      "minimum_finite_fraction": 1.0
+    }
+  },
+  "all_finite": true,
+  "figure": "comparisons/pbr_report/v22_vs_v3_multi_scene.png",
+  "method": "Same trained Gaussian model and camera. V2.2 control uses its Metal SH Edit; V3 rounds use manual PBR parameters, HDR, GGX, shadow visibility, reflection and refraction rays. CUDA timings cover synchronized primary, shadow and secondary tracing; they exclude property-map rasterization, GUI work and image encoding."
+}

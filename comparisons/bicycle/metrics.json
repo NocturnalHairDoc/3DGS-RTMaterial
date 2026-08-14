@@ -1,0 +1,33 @@
+{
+  "dataset": "bicycle",
+  "sample_rate": 1.0,
+  "views": 194,
+  "gaussians": 61380,
+  "metrics": {
+    "V2.1": {
+      "instances": 4,
+      "coverage": 0.6840827631150211,
+      "saga_coherence": 0.11540822595086055,
+      "anchor_purity": 0.9501536116601967,
+      "spatial_components_per_instance": 4.5,
+      "cross_instance_anchor_edges": 0.04032980820935651,
+      "sam_mask_agreement": 0.9858595006740395
+    },
+    "V2.2": {
+      "instances": 10,
+      "coverage": 0.7719289670902574,
+      "saga_coherence": 0.1295202456466434,
+      "anchor_purity": 0.9899115679280724,
+      "spatial_components_per_instance": 1.1,
+      "cross_instance_anchor_edges": 0.029593094944512947,
+      "sam_mask_agreement": 0.9543929578768002
+    }
+  },
+  "label_mapping_v22_to_v21": {
+    "6": 0,
+    "7": 1,
+    "2": 2,
+    "5": 3
+  },
+  "figure": "comparisons/bicycle/real_bicycle_comparison.png"
+}

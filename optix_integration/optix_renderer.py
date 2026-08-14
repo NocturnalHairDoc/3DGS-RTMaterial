@@ -34,9 +34,10 @@ import logging
 import sys
 import os
 import torch
+import torch.nn.functional as F
 
 from .gaussian_adapter import GaussianAdapter
-from .ray_generator import RayGenerator
+from .ray_generator import Batch, RayGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,27 @@ class OptiXRenderer:
             "depth": torch.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0),
             "opacity": torch.nan_to_num(opacity, nan=0.0).clamp(0.0, 1.0),
         }
+
+    def trace_world_rays(self, origins: torch.Tensor, directions: torch.Tensor) -> dict | None:
+        """Trace arbitrary world-space shadow/reflection/refraction rays.
+
+        Inputs may be ``(H,W,3)`` or ``(1,H,W,3)``.  An identity transform is
+        supplied because the standard 3DGRT tracer transforms camera-space rays
+        by ``T_to_world`` exactly once.
+        """
+        if not self.available:
+            return None
+        if not self._bvh_built:
+            self.build_bvh(rebuild=True)
+        if origins.ndim == 3:
+            origins = origins.unsqueeze(0)
+        if directions.ndim == 3:
+            directions = directions.unsqueeze(0)
+        if origins.shape != directions.shape or origins.ndim != 4 or origins.shape[-1] != 3:
+            raise ValueError("world rays must have matching shape (B,H,W,3)")
+        identity = torch.eye(4, device=origins.device, dtype=origins.dtype).unsqueeze(0)
+        batch = Batch(origins.contiguous(), F.normalize(directions, dim=-1).contiguous(), identity)
+        return self._trace_batch(batch)
 
     def render_tiled(self, camera, tile_size=1024, segment_mask=None, progress=None):
         """Render bounded ray batches and stitch exact full-frame coordinates on CPU."""

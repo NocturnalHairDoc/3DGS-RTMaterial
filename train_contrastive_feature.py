@@ -18,6 +18,7 @@ from scene import Scene, GaussianModel, FeatureGaussianModel
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
+from training_utils import safe_masked_mean, sample_consistent_pairs
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams, get_combined_args
 
@@ -264,9 +265,9 @@ def training(dataset, opt, pipe, iteration, saving_iterations, checkpoint_iterat
 
         rand_num = torch.rand_like(sum_0)
 
-        sampled_positive = torch.logical_and(consistent_positive, rand_num < sampled_num / consistent_positive.count_nonzero())
+        sampled_positive = sample_consistent_pairs(consistent_positive, rand_num, sampled_num)
 
-        sampled_negative = torch.logical_and(consistent_negative, rand_num < sampled_num / consistent_negative.count_nonzero())
+        sampled_negative = sample_consistent_pairs(consistent_negative, rand_num, sampled_num)
 
         sampled_mask_positive = torch.logical_or(
             torch.logical_or(
@@ -289,13 +290,19 @@ def training(dataset, opt, pipe, iteration, saving_iterations, checkpoint_iterat
         sampled_mask_negative = sampled_mask_negative.bool()
 
         per_pixel_weight = per_pixel_weight.unsqueeze(0)
-        loss = (- per_pixel_weight[:, sampled_mask_positive] * gt_corrs[:, sampled_mask_positive] * corr[:, sampled_mask_positive]).mean() \
-                + (per_pixel_weight[:, sampled_mask_negative] * (1 - gt_corrs[:, sampled_mask_negative]) * torch.relu(corr[:, sampled_mask_negative])).mean() \
-                + opt.rfn * rendered_feature_norm_reg
+        positive_values = (-per_pixel_weight[:, sampled_mask_positive]
+                           * gt_corrs[:, sampled_mask_positive]
+                           * corr[:, sampled_mask_positive])
+        negative_values = (per_pixel_weight[:, sampled_mask_negative]
+                           * (1 - gt_corrs[:, sampled_mask_negative])
+                           * torch.relu(corr[:, sampled_mask_negative]))
+        loss = (safe_masked_mean(positive_values, torch.ones_like(positive_values, dtype=torch.bool))
+                + safe_masked_mean(negative_values, torch.ones_like(negative_values, dtype=torch.bool))
+                + opt.rfn * rendered_feature_norm_reg)
 
         with torch.no_grad():
-            cosine_pos = corr[gt_corrs == 1].mean()
-            cosine_neg = corr[gt_corrs == 0].mean()
+            cosine_pos = safe_masked_mean(corr, gt_corrs == 1)
+            cosine_neg = safe_masked_mean(corr, gt_corrs == 0)
 
         loss.backward()
 

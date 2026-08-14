@@ -1,0 +1,41 @@
+{
+  "scene": "bonsai",
+  "camera": "DSCF5565",
+  "panel": "comparisons/pbr_multi/bonsai_DSCF5565_pbr_rounds.png",
+  "metrics": {
+    "v22_stylized": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.28552693128585815,
+      "contrast": 0.26101118326187134
+    },
+    "dielectric": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.402686208486557,
+      "contrast": 0.19104017317295074,
+      "highlight_fraction": 0.0009566075168550014,
+      "secondary_seconds": 0.03732048099482199
+    },
+    "metal": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.4926949441432953,
+      "contrast": 0.19281163811683655,
+      "highlight_fraction": 0.00353057193569839,
+      "secondary_seconds": 0.0373748109996086
+    },
+    "glass": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.38952332735061646,
+      "contrast": 0.20757465064525604,
+      "highlight_fraction": 9.86193299468141e-06,
+      "secondary_seconds": 0.03975096400245093
+    },
+    "runtime": {
+      "primary_seconds": 0.042397598997922614,
+      "shadow_seconds": 0.01581625299877487,
+      "mean_visibility": 0.09465041011571884,
+      "gaussians": 1215289,
+      "width": 390,
+      "height": 260
+    }
+  }
+}

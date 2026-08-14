@@ -12,6 +12,8 @@ import torch
 from rt_gs_gui import RTGSConfig
 from rt_gs_gui_sh_clip import SHMaterialViewer
 from scene import FeatureGaussianModel, GaussianModel
+from export_manager import capture_export_snapshot
+from material_sh_edit import MaterialSHEditor
 
 
 def main():
@@ -27,7 +29,11 @@ def main():
     scale_gate = torch.nn.Sequential(torch.nn.Linear(1, opt.FEATURE_DIM), torch.nn.Sigmoid()).cuda()
     gui = SHMaterialViewer(opt, GaussianModel(opt.sh_degree),
                            FeatureGaussianModel(opt.FEATURE_DIM), scale_gate)
-    renderer = gui._cached_export_renderer(64, 48)
+    snapshot = capture_export_snapshot(gui.engine["scene"], gui.camera,
+                                       gui.material_assignments, gui.hidden_segments)
+    renderer = gui._new_export_renderer(64, 48, snapshot.scene)
+    renderer.build_bvh()
+    editor = MaterialSHEditor(snapshot.scene)
     cases = {
         "RGB": "channel_rgb.png", "RGBA": "channel_rgba.png",
         "Depth": "channel_depth.png", "Normals": "channel_normals.png",
@@ -37,7 +43,7 @@ def main():
     }
     for channel, filename in cases.items():
         path = gui._write_export_image(str(root / "exports" / filename), renderer,
-                                       gui.camera, channel)
+                                       snapshot, editor, channel)
         decoded = imageio.imread(path)
         if decoded.shape[:2] != (48, 64):
             raise RuntimeError(f"{channel}: invalid decoded shape {decoded.shape}")

@@ -87,10 +87,12 @@ imgui.ini
 # ── PDF documents ───────────────────────────────────────────────────────────
 *.pdf
 
-# ── Report folder: ignore source/images, keep only the compiled PDF ──────────
-report/*.tex
-report/*.bib
-!report/*.pdf
+# ── Report folder: keep reproducible sources, figures and compiled PDF ───────
+!report/*.tex
+!report/*.bib
+!report/fig_rgb.png
+!report/fig_multi_mat.png
+!report/3dgs-RTM.pdf
 
 # ── OS / editor ─────────────────────────────────────────────────────────────
 .DS_Store
@@ -115,11 +117,14 @@ venv/
 conda-env/
 
 # ── Test and analysis caches ────────────────────────────────────────────────
+tests/
+.github/workflows/tests.yml
 .pytest_cache/
 .coverage
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+tmp/
 
 # ── Local credentials and machine-specific configuration ───────────────────
 *.pem
