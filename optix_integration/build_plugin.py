@@ -188,39 +188,6 @@ def _find_cuda_home() -> str | None:
     return None
 
 
-def print_setup_instructions():
-    """Print step-by-step setup instructions for the OptiX plugin."""
-    print("""
-=======================================================================
-  3DGRT OptiX Plugin — Setup Instructions
-=======================================================================
-
-Step 1: Install CUDA 11.8+ toolkit
-    sudo apt install nvidia-cuda-toolkit
-    # or download from https://developer.nvidia.com/cuda-downloads
-
-Step 2: Download NVIDIA OptiX SDK 8.x
-    https://developer.nvidia.com/designworks/optix/downloads/legacy
-    export OPTIX_HOME=/path/to/OptiX-SDK-8.x.x
-
-Step 3: Install slangtorch (Slang shader compiler)
-    pip install slangtorch
-
-Step 4: Install the threedgrut Python package
-    cd 3dgrut
-    pip install -e . --no-build-isolation
-
-Step 5: (Ubuntu 24.04 only) Install gcc-11
-    sudo apt install gcc-11 g++-11
-    export CC=gcc-11 CXX=g++-11
-
-Step 6: Compile the plugin
-    python -c "from optix_integration import build_3dgrt_plugin; build_3dgrt_plugin()"
-
-=======================================================================
-""")
-
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Build the 3DGRT OptiX plugin")

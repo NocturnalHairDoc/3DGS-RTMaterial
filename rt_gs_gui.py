@@ -33,7 +33,7 @@ try:
 except ImportError:
     HDBSCAN_AVAILABLE = False
 
-from scene import Scene, GaussianModel, FeatureGaussianModel
+from scene import GaussianModel, FeatureGaussianModel
 from gaussian_renderer import render, render_contrastive_feature
 from scene.cameras import Camera
 from utils.graphics_utils import focal2fov, fov2focal
@@ -51,13 +51,11 @@ try:
     _3dgrut_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "3dgrut"))
     if _3dgrut_root not in _optix_sys.path:
         _optix_sys.path.insert(0, _3dgrut_root)
-    import threedgrut  # noqa: triggers typing.Self Python 3.10 compat patch
-    from optix_integration import OptiXRenderer, MaterialCompositor
+    from optix_integration import OptiXRenderer
     OPTIX_INTEGRATION_AVAILABLE = True
 except Exception as _optix_import_err:
     OPTIX_INTEGRATION_AVAILABLE = False
     OptiXRenderer = None
-    MaterialCompositor = None
 else:
     _optix_import_err = None
 
@@ -291,7 +289,6 @@ class RTGSViewerGUI:
 
         # OptiX 3DGRT renderer (initialized after model is loaded into GPU)
         self._optix_renderer = None
-        self._material_compositor = None
         self._backend_error = None
         if OPTIX_INTEGRATION_AVAILABLE:
             try:
@@ -304,7 +301,6 @@ class RTGSViewerGUI:
                 )
                 if self._optix_renderer.available:
                     self._optix_renderer.build_bvh()
-                    self._material_compositor = MaterialCompositor()
                     print("OptiX 3DGRT: ready (true ray tracing active).")
                 else:
                     self._backend_error = "3DGRT tracer unavailable"
@@ -503,7 +499,7 @@ class RTGSViewerGUI:
     def _run_sam_driven_segment(self):
         """SAM-driven segmentation: project 2D SAM masks to 3D via multi-view voting."""
         try:
-            from sam_driven_segment import run_sam_driven_segment
+            from segmentation.sam_driven import run_sam_driven_segment
             n = run_sam_driven_segment(
                 self.opt.MODEL_PATH,
                 self.engine["scene"],

@@ -8,16 +8,6 @@ from tqdm import tqdm
 from segment_anything_langsplat import SamAutomaticMaskGenerator, sam_model_registry
 import cv2
 
-from dataclasses import dataclass, field
-from typing import Tuple, Type
-from copy import deepcopy
-
-import torch
-import torchvision
-from torch import nn
-
-
-
 def create(clip_model, image_list, data_list, save_folder):
     assert image_list is not None, "image_list must be provided to generate features"
     embed_size=512

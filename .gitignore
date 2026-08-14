@@ -119,6 +119,9 @@ conda-env/
 # ── Test and analysis caches ────────────────────────────────────────────────
 tests/
 .github/workflows/tests.yml
+export_channels_smoke.py
+export_smoke_test.py
+highres_export_smoke.py
 .pytest_cache/
 .coverage
 htmlcov/

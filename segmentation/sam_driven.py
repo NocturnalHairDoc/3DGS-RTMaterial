@@ -12,8 +12,8 @@ from tqdm import tqdm
 
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from utils.camera_utils import cameraList_from_camInfos
-from segmentation_utils import nearest_visible_points
-from instance_graph import (
+from .utils import nearest_visible_points
+from .instance_graph import (
     associate_mask_nodes,
     build_anchor_graph,
     make_mask_nodes,
@@ -113,20 +113,6 @@ def _mask_assignments_for_view(xyz, cam, masks, mask_chunk=32):
     visible_numpy = visible_ids.detach().cpu().numpy()
     assignments[visible_numpy] = best_mask.detach().cpu().numpy()
     return assignments, visible_numpy
-
-
-def _labels_for_view(xyz, cam, masks, node_offset, mask_chunk=32):
-    """Compatibility helper returning globally unique point-level node labels."""
-    assignments, _ = _mask_assignments_for_view(xyz, cam, masks, mask_chunk)
-    labels = np.full(xyz.shape[0], -1, dtype=np.int64)
-    node_sizes, local_masks = [], []
-    for local_mask in np.unique(assignments[assignments >= 0]).tolist():
-        selected = np.flatnonzero(assignments == int(local_mask))
-        node_id = node_offset + len(node_sizes)
-        labels[selected] = node_id
-        node_sizes.append(int(selected.size))
-        local_masks.append(int(local_mask))
-    return labels, node_sizes, local_masks
 
 
 @torch.no_grad()

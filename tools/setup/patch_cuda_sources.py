@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    root = Path(__file__).resolve().parent / "submodules"
+    root = Path(__file__).resolve().parents[2] / "submodules"
     headers = sorted(root.glob("diff-gaussian-rasterization*/cuda_rasterizer/rasterizer_impl.h"))
     if not headers:
         raise SystemExit(f"No rasterizer headers found under {root}")

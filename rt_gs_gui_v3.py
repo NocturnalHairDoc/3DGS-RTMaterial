@@ -23,7 +23,7 @@ import torch
 import torch.nn.functional as F
 
 from gaussian_renderer import render
-from pbr_lite import (
+from materials.pbr_lite import (
     HDREnvironment,
     PBRLiteCompositor,
     PBRMaterial,
@@ -34,7 +34,7 @@ from pbr_lite import (
     srgb_to_linear,
     stabilize_gbuffer_normals,
 )
-from project_state import load_project_state
+from viewer.project_state import load_project_state
 from rt_gs_gui import RTGSConfig
 from rt_gs_gui_sh_clip import SHMaterialViewer
 from scene import FeatureGaussianModel, GaussianModel

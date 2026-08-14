@@ -13,23 +13,16 @@ import os
 import torch
 from random import randint
 from gaussian_renderer import render_contrastive_feature
-import sys
 from scene import Scene, GaussianModel, FeatureGaussianModel
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
-from training_utils import safe_masked_mean, sample_consistent_pairs
-from argparse import ArgumentParser, Namespace
+from training.utils import safe_masked_mean, sample_consistent_pairs
+from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, OptimizationParams, get_combined_args
 
 import numpy as np
 
-
-import torch
-from torch import nn
-
-
-import time
 
 try:
     from torch.utils.tensorboard import SummaryWriter

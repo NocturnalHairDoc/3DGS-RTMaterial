@@ -13,8 +13,8 @@ import numpy as np
 import torch
 
 from optix_integration import OptiXRenderer
-from material_sh_edit import MaterialSHEditor
-from pbr_lite import (
+from materials import MaterialSHEditor
+from materials.pbr_lite import (
     HDREnvironment,
     PBRLiteCompositor,
     PBRMaterial,
@@ -24,7 +24,7 @@ from pbr_lite import (
     srgb_to_linear,
     stabilize_gbuffer_normals,
 )
-from sam_driven_segment import _load_cfg_args
+from segmentation.sam_driven import _load_cfg_args
 from scene import GaussianModel
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from utils.camera_utils import cameraList_from_camInfos

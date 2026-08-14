@@ -15,10 +15,11 @@ from plyfile import PlyData
 from scipy.ndimage import binary_dilation
 from scipy.optimize import linear_sum_assignment
 
-from instance_graph import build_anchor_graph
-from sam_driven_segment import _load_cfg_args, _mask_assignments_for_view, _project_points_to_image
+from segmentation.instance_graph import build_anchor_graph
+from segmentation.sam_driven import (_load_cfg_args, _mask_assignments_for_view,
+                                     _project_points_to_image)
 from scene.dataset_readers import sceneLoadTypeCallbacks
-from segmentation_utils import nearest_visible_points
+from segmentation.utils import nearest_visible_points
 from utils.camera_utils import cameraList_from_camInfos
 
 

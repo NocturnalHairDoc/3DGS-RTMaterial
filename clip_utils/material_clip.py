@@ -140,32 +140,6 @@ def masked_original_rgb_crop(original_chw, mask_hw, padding=8, outside=0.5):
     return rgb * soft + float(outside) * (1.0 - soft)
 
 
-def blend_material_params_from_scores(scores, temperature=0.10):
-    material_names = list(MATERIAL_PARAM_PRESETS.keys())
-    logits = torch.tensor([scores[m] for m in material_names], dtype=torch.float32)
-    weights = torch.softmax(logits / max(temperature, 1e-6), dim=0)
-
-    specular_gain = 0.0
-    saturation = 0.0
-    opacity_scale = 0.0
-    tint = torch.zeros(3, dtype=torch.float32)
-
-    for idx, material_name in enumerate(material_names):
-        w = float(weights[idx].item())
-        preset = MATERIAL_PARAM_PRESETS[material_name]
-        specular_gain += w * preset["specular_gain"]
-        saturation += w * preset["saturation"]
-        opacity_scale += w * preset["opacity_scale"]
-        tint += w * torch.tensor(preset["tint"], dtype=torch.float32)
-
-    return {
-        "strength": 1.0,
-        "specular_gain": float(specular_gain),
-        "saturation": float(saturation),
-        "opacity_scale": float(opacity_scale),
-        "tint": [float(x) for x in tint.tolist()],
-    }
-
 def params_from_text_prompt(text_prompt: str) -> dict:
     text = text_prompt.lower()
 

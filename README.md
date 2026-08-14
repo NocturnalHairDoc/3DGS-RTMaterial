@@ -121,7 +121,7 @@ bash setup.sh
 2. Downloads the SAGA CUDA rasterizer sources into the ignored `submodules/` directory
 3. Downloads 3DGRT into the ignored `3dgrut/` directory
 4. Builds the rasterizers and a PyTorch-version-compatible PyTorch3D, then installs `threedgrut` / `threedgrt_tracer`
-5. Runs `runtime_check.py`, including a GPU architecture compatibility check
+5. Runs `tools/runtime_check.py`, including a GPU architecture compatibility check
 
 ### Manual install (if `setup.sh` fails)
 
@@ -131,7 +131,7 @@ conda activate gaussian_splatting_v2
 
 # First fetch the SAGA and 3DGRT sources, or let setup.sh do this automatically.
 # 3DGS CUDA rasterizers
-python patch_cuda_sources.py
+python tools/setup/patch_cuda_sources.py
 pip install submodules/diff-gaussian-rasterization/ --no-build-isolation
 pip install submodules/diff-gaussian-rasterization_contrastive_f/ --no-build-isolation
 pip install submodules/diff-gaussian-rasterization-depth/ --no-build-isolation
@@ -140,7 +140,7 @@ pip install --no-build-isolation --no-deps \
   git+https://github.com/facebookresearch/pytorch3d.git@9381c4016376345bb795b97c45a6c2de66db354a
 
 # 3DGRT / OptiX
-python patch_3dgrut_sources.py
+python tools/setup/patch_3dgrut_sources.py
 pip install -e 3dgrut/
 
 # Extra Python dependencies
@@ -168,13 +168,13 @@ intentionally not stored in Git.
 ### Diagnostics and tests
 
 ```bash
-python runtime_check.py
+python tools/runtime_check.py
 
 # Included 61,380-Gaussian OptiX benchmark
-python gpu_optix_smoke.py
+python -m tools.benchmarks.gpu_optix_smoke
 ```
 
-`runtime_check.py` checks the Python dependencies, CUDA runtime, GPU
+`tools/runtime_check.py` checks the Python dependencies, CUDA runtime, GPU
 architecture and downloaded source trees. The development test suite is kept
 locally and is not distributed with the repository. OptiX diagnostics require
 an NVIDIA GPU and a trained scene.
@@ -213,32 +213,43 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 ```
 3DGS-RTMaterial-V3/
 ├── rt_gs_gui_v3.py            # V3 dual Stylized/PBR-lite viewer (entry point)
-├── pbr_lite.py                # PBR fields, HDR, GGX and hybrid compositor
-├── pbr_gpu_smoke.py           # Real-scene multi-round GPU benchmark
-├── compare_pbr_versions.py    # V2.2/V3 report generator
 ├── rt_gs_gui_sh_clip.py       # Retained V2.2 SH-material + CLIP viewer
 ├── rt_gs_gui.py               # Shared base viewer and Blinn-Phong alternative
 ├── saga_gui.py                # Original SAGA GUI (segmentation only)
+├── materials/                 # Material models and editing utilities
+│   ├── pbr_lite.py            #   PBR fields, HDR, GGX and hybrid compositor
+│   └── sh_editor.py           #   SH-based material editor
+├── segmentation/              # SAM/SAGA segmentation and instance association
+│   ├── sam_driven.py          #   Standalone segmentation entry module
+│   ├── instance_graph.py      #   Cross-view instance graph
+│   └── utils.py               #   Mask association and visibility helpers
+├── viewer/                    # Viewer state, export and interaction support
+│   ├── project_state.py       #   Versioned state persistence and migration
+│   ├── export_manager.py      #   Background export worker and status queue
+│   ├── undo_manager.py        #   Bounded lightweight undo/redo history
+│   ├── render_policy.py       #   Interactive raster/OptiX camera policy
+│   └── utils.py               #   Shared viewer helpers
+├── training/                  # Training-only utilities
+│   └── utils.py               #   NaN-safe contrastive loss helpers
+├── tools/                     # Setup, diagnostics and reproducible benchmarks
+│   ├── runtime_check.py       #   Dependency/GPU architecture diagnostics
+│   ├── setup/                 #   Downloaded-source compatibility patches
+│   └── benchmarks/
+│       ├── gpu_optix_smoke.py
+│       ├── pbr_gpu_smoke.py
+│       ├── compare_instance_versions.py
+│       └── compare_pbr_versions.py
 ├── optix_integration/         # OptiX / 3DGRT integration module
 │   ├── optix_renderer.py      #   BVH build + per-frame ray trace
 │   ├── gaussian_adapter.py    #   Wraps SAGA GaussianModel for 3DGRT API
 │   ├── ray_generator.py       #   Camera → ray batch conversion
-│   ├── material_compositor.py #   Blinn-Phong shading on ray-traced normals
 │   └── build_plugin.py        #   Compiles the 3DGRT Slang/CUDA plugin
-├── material_sh_edit/          # SH-based material editor utilities
-├── render_policy.py           # Interactive raster/OptiX and camera policy
-├── export_manager.py          # Background export worker and status queue
-├── segmentation_utils.py      # Cross-view mask association and visibility helpers
-├── training_utils.py          # NaN-safe contrastive loss helpers
 ├── benchmarks/                # Reproducible 61k GPU smoke results
-├── project_state.py           # Versioned state persistence and migration
-├── undo_manager.py            # Bounded lightweight undo/redo history
 ├── 3dgrut/                    # NVIDIA 3DGRT source downloaded by setup.sh
 ├── scene/                     # Scene + GaussianModel classes
 ├── gaussian_renderer/         # 3DGS CUDA rasterizer wrappers
 ├── submodules/                # downloaded by setup.sh; not stored in Git
 ├── demo/                      # Screenshots and demo video
-├── runtime_check.py           # dependency/GPU architecture diagnostics
 ├── environment.yml            # Conda environment specification
 └── setup.sh                   # One-shot environment setup
 ```

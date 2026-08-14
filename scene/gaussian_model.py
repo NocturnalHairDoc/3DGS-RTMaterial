@@ -12,7 +12,7 @@
 import torch
 import numpy as np
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
-from segmentation_utils import has_selected_points
+from segmentation.utils import has_selected_points
 from torch import nn
 import os
 from utils.system_utils import mkdir_p
