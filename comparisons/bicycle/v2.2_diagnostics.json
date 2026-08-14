@@ -1,0 +1,18 @@
+{
+  "version": "2.2",
+  "gaussians": 61380,
+  "anchors": 1911,
+  "anchor_edges": 9438,
+  "voxel_size": 2.2088282589425536,
+  "target_anchors": 1600,
+  "max_anchor_points": 128,
+  "graph_threshold": 0.5,
+  "usable_views": 189,
+  "mask_nodes": 2759,
+  "association_edges": 34926,
+  "accepted_associations": 12419,
+  "instances": 10,
+  "boundary_anchors": 95,
+  "boundary_gaussians": 3691,
+  "covered_gaussians": 47381
+}

@@ -1,0 +1,30 @@
+\section{61k-Gaussian GPU Smoke Test}
+The bundled smoke scene contains 61,380 Gaussians. We evaluated a 160$\times$90
+frame on an NVIDIA GeForce RTX 5090 (32,088.5 MiB), Python 3.10.19,
+PyTorch 2.10.0+cu128, and CUDA runtime 12.8. The 3DGRT extension was compiled
+before timing; JIT compilation is an installation cost and is not included.
+CUDA synchronization brackets every measured operation. Table~\ref{tab:gpu}
+reports one BVH build, the first render, and ten subsequent stable renders.
+
+\begin{table}[h]
+\centering
+\caption{61,380-Gaussian OptiX smoke results at 160$\times$90.}
+\label{tab:gpu}
+\begin{tabular}{lr}
+\toprule
+Metric & Result\\
+\midrule
+BVH build & 42.24 ms\\
+First frame & 44.04 ms\\
+Stable mean & 9.15 ms (109.23 FPS)\\
+Stable median & 9.19 ms\\
+Stable P95 & 9.67 ms\\
+Stable range & 8.74--9.67 ms\\
+Peak allocated VRAM & 32.73 MiB\\
+Peak reserved VRAM & 54.00 MiB\\
+\bottomrule
+\end{tabular}
+\end{table}
+All RGB, normal, depth, and opacity tensors were finite, and opacity contained
+visible hits. These numbers validate the included small-scene path only; they
+must not be extrapolated to million-Gaussian scenes or higher resolutions.

@@ -1,0 +1,41 @@
+{
+  "scene": "counter",
+  "camera": "DSCF5857",
+  "panel": "comparisons/pbr_multi/counter_DSCF5857_pbr_rounds.png",
+  "metrics": {
+    "v22_stylized": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.31438276171684265,
+      "contrast": 0.2068907767534256
+    },
+    "dielectric": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.38316860795021057,
+      "contrast": 0.20344020426273346,
+      "highlight_fraction": 0.0,
+      "secondary_seconds": 0.06983972500165692
+    },
+    "metal": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.4803968369960785,
+      "contrast": 0.20494574308395386,
+      "highlight_fraction": 0.0006822226569056511,
+      "secondary_seconds": 0.06862109299981967
+    },
+    "glass": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.4264991581439972,
+      "contrast": 0.14420481026172638,
+      "highlight_fraction": 0.0,
+      "secondary_seconds": 0.06792961700557498
+    },
+    "runtime": {
+      "primary_seconds": 0.04973511000571307,
+      "shadow_seconds": 0.02619794299971545,
+      "mean_visibility": 0.06688793748617172,
+      "gaussians": 1070314,
+      "width": 389,
+      "height": 260
+    }
+  }
+}

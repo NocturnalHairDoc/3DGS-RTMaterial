@@ -1,0 +1,297 @@
+\documentclass[10pt,twocolumn,a4paper]{article}
+\usepackage[margin=18mm,columnsep=9mm]{geometry}
+\usepackage{newtxtext}
+\usepackage{graphicx,booktabs,amsmath,amssymb,microtype,xcolor}
+\usepackage{enumitem,hyperref,natbib}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\hypersetup{colorlinks=true,allcolors=blue!55!black}
+\setlist{nosep,leftmargin=*}
+\title{3DGS-RTMaterial V2.1: A Stable Interactive System for Segment-Level Appearance Editing of Gaussian Scenes}
+\author{Zhaoyue Yuan \and Yuehai Zhou\\Simon Fraser University}
+\date{V2.1 stable report -- August 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present V2.1 of 3DGS-RTMaterial, an interactive system that combines a
+pre-trained 3D Gaussian Splatting (3DGS) scene, SAGA-style feature-field
+segmentation, temporary spherical-harmonic (SH) and opacity edits, and NVIDIA
+3D Gaussian Ray Tracing (3DGRT). The system is deliberately described as an
+appearance editor rather than an inverse-rendering or physically based
+material estimator: illumination remains baked into learned SH coefficients,
+and the five presets are stylized transformations. V2.1 focuses on reliability.
+It makes empty selections no-ops, replaces view-local SAM index voting with
+visibility-aware cross-view association, corrects the 3DGRT SH-degree
+contract, eliminates empty-sample NaNs in contrastive training, freezes scene
+state for background export, and composes ID channels by nearest depth. A
+61,380-Gaussian GPU smoke test and 26 CPU-safe regression tests provide a
+reproducible stability baseline. We document the exact implemented pipeline,
+its limits, and a path toward intrinsic decomposition and relighting.
+\end{abstract}
+
+\section{Introduction}
+3DGS represents a radiance field with anisotropic Gaussian primitives and
+achieves high-quality novel-view synthesis through ordered alpha compositing
+\citep{kerbl2023gaussians}. Its compact explicit representation is attractive
+for interactive editing, but it does not expose albedo, roughness, metallicity,
+or illumination. Appearance is stored as opacity and view-dependent SH colour.
+
+Our objective is therefore practical: select a coherent subset of Gaussians,
+apply reversible appearance transformations, preview through rasterization or
+3DGRT, and export deterministic results. V2.1 makes three claims only:
+\begin{enumerate}
+  \item segment labels can be created interactively or from multi-view SAM
+        masks and remain attached to 3D Gaussians;
+  \item segment-specific SH/opacity transformations are reversible and can be
+        rendered by both the raster and ray-tracing paths;
+  \item state, export, and tests are sufficiently isolated to serve as a stable
+        base for subsequent research.
+\end{enumerate}
+It does \emph{not} claim recovered physical materials, relighting, refraction,
+or real-time full-resolution OptiX rendering.
+
+\section{Related Work}
+\paragraph{Gaussian scene representations.}
+3DGS introduced anisotropic Gaussian primitives optimized from calibrated
+images \citep{kerbl2023gaussians}. 3DGRT traces those primitives through a BVH
+and exposes depth, opacity, and normal estimates in addition to radiance
+\citep{moenne20243dgrt}. 3DGUT generalizes Gaussian tracing to distorted
+cameras and secondary-ray use cases \citep{3dgut2025}.
+
+\paragraph{Language and mask supervision.}
+SAGA distills multi-view 2D segmentation masks into a scale-aware 3D Gaussian
+feature field for promptable selection \citep{cen2023saga}. SAM supplies the
+2D automatic masks \citep{kirillov2023sam}, while CLIP supplies a shared
+image-text embedding used here only for coarse material-name ranking
+\citep{radford2021clip}. The distinction is important: click segmentation uses
+the learned 3D feature field; SAM-driven segmentation explicitly merges 2D
+masks; CLIP material detection averages scores from three nearby views.
+
+\paragraph{Inverse rendering and relighting.}
+GS-IR learns normals, material parameters, and illumination for relighting
+\citep{liang2024gsir}; GaussianShader targets reflective appearance with a
+shading model \citep{jiang2024gaussianshader}; SVG-IR improves visibility-aware
+inverse rendering \citep{svgir2025}. These methods motivate a future physical
+branch, but differ from V2.1 because they optimize intrinsic scene properties.
+V2.1 instead edits an already trained radiance representation without claiming
+decomposition.
+
+\section{System Architecture}
+Figure~\ref{fig:pipeline} shows the implemented data flow. Training produces a
+scene Gaussian model and a 32-dimensional contrastive feature model. The GUI
+owns camera, segmentation labels, material assignments, undo/redo history, and
+project metadata. Two render backends consume the same scene: the differentiable
+rasterizer during interaction, and 3DGRT for settled or offline frames.
+
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=7mm and 8mm,
+  box/.style={draw,rounded corners,align=center,minimum height=10mm,minimum width=27mm,fill=blue!4},
+  arrow/.style={-{Latex[length=2mm]},thick}]
+\node[box] (images) {calibrated\\multi-view images};
+\node[box,right=of images] (scene) {3DGS scene\\position/scale/SH/opacity};
+\node[box,below=of scene] (feature) {SAGA feature field\\32D scale-gated features};
+\node[box,right=of scene] (segment) {segment state\\per-Gaussian integer IDs};
+\node[box,below=of segment] (material) {material state\\preset or custom parameters};
+\node[box,right=of segment] (edit) {temporary SH/opacity\\apply--render--restore};
+\node[box,right=of edit] (render) {raster preview\\or 3DGRT/OptiX};
+\node[box,below=of render] (export) {frozen export snapshot\\RGB/depth/normal/ID};
+\draw[arrow] (images)--(scene);
+\draw[arrow] (images)|-(feature);
+\draw[arrow] (scene)--(segment);
+\draw[arrow] (feature)--(segment);
+\draw[arrow] (segment)--(edit);
+\draw[arrow] (material)--(edit);
+\draw[arrow] (edit)--(render);
+\draw[arrow] (render)--(export);
+\end{tikzpicture}
+}
+\caption{V2.1 architecture. Material edits are temporary transformations of
+learned appearance, not a recovered BRDF. Export operates on cloned tensors and
+copied state so subsequent GUI edits cannot change an in-flight result.}
+\label{fig:pipeline}
+\end{figure*}
+
+\subsection{Gaussian and camera interface}
+For Gaussian $i$, the scene stores center $\boldsymbol\mu_i$, log-scale
+$\mathbf{s}_i$, quaternion $\mathbf{q}_i$, opacity logit $o_i$, and SH
+coefficients $\mathbf{f}_i$. The adapter exposes activated scale
+$\exp(\mathbf{s}_i)$, normalized rotation, and opacity $\sigma(o_i)$. SAGA
+stores features as $N\times16\times3$ for degree three; V2.1 flattens this to
+$N\times48$ for the tracer but reports active degree 3, because the 3DGRT API
+interprets that field as the SH \emph{degree}, not a coefficient count. Camera
+rays remain in camera space and the extrinsic
+transform is applied exactly once inside the tracer.
+
+\subsection{Interactive render policy}
+Full OptiX frames are expensive on the reference pipeline. While orbiting or
+panning, V2.1 uses the raster backend with the same temporary material edits.
+On release, a dirty flag requests a full 3DGRT settle frame. This policy keeps
+camera control responsive without implying that both paths have identical
+intersection semantics.
+
+\section{Segmentation}
+\subsection{Feature-field selection}
+The contrastive feature model is trained from multi-view SAM mask relations,
+following SAGA's scale-conditioned formulation. At run time, click prompts
+query the rendered feature map and produce a per-Gaussian boolean selection.
+Confirmed segments are encoded as integers in the scene mask; label 1 denotes
+unsegmented Gaussians and segment $k$ uses encoded value $k+1$. In V2.1 an
+empty boolean selection returns immediately. Earlier behavior inverted an
+empty mask and could silently segment the entire scene.
+
+\subsection{Explicit multi-view SAM association}
+SAM mask indices are local to an image. Consequently, mask 17 in two views has
+no guaranteed semantic correspondence. V2.1 constructs correspondence from
+shared visible 3D support:
+\begin{enumerate}
+  \item project Gaussian centers into each calibrated image and reject points
+        outside the frustum;
+  \item apply a per-pixel center z-buffer, retaining the nearest depth within a
+        small tolerance to suppress obvious occluded votes;
+  \item because automatic SAM masks overlap, assign a point to the smallest
+        containing mask in that view, yielding at most one vote per view;
+  \item treat every (view, local-mask) pair as a distinct node and union nodes
+        in nearby views when their 3D intersection satisfies either
+        $\operatorname{IoU}\ge0.15$ or containment $\ge0.50$;
+  \item assign each Gaussian to the cross-view component with the largest
+        number of distinct-view votes, requiring at least two views and ten
+        points per output segment.
+\end{enumerate}
+This is a geometry-based association heuristic, not learned instance tracking.
+The center z-buffer does not model full projected Gaussian footprints, so thin
+structures and heavy occlusion remain difficult.
+
+\subsection{Three-view CLIP material ranking}
+For coarse material suggestions, the viewer renders yaw offsets of
+$-10^\circ$, $0^\circ$, and $+10^\circ$, forms a masked crop from the original
+RGB image, and averages image--text similarity for each material prompt:
+\begin{equation}
+  \bar{s}_m=\frac{1}{3}\sum_{v=1}^{3}
+  \langle \mathbf{e}^{\mathrm{image}}_v,\mathbf{e}^{\mathrm{text}}_m\rangle.
+\end{equation}
+A minimum score and top-two margin reject uncertain predictions. This is
+multi-view score aggregation, not a 3D material estimator.
+
+\section{Appearance Editing}
+The editor snapshots original DC SH, higher-order SH, and opacity tensors. For
+each render it restores the snapshot, applies all active assignments, renders,
+and restores again in a \texttt{finally} block. Let $\mathbf{c}$ be linear RGB
+decoded from the degree-zero coefficient. Custom parameters apply tint
+$\mathbf{t}$, saturation $a$, higher-order gain $g$, opacity scale $p$, and
+strength $\lambda$. In simplified form,
+\begin{align}
+ \mathbf{c}' &= (1-\lambda)\mathbf{c}+\lambda\,
+   \operatorname{sat}_a(\mathbf{c}\odot\mathbf{t}),\\
+ \mathbf{f}'_{>0} &= [1-\lambda+\lambda g]\mathbf{f}_{>0},\\
+ \alpha' &= \operatorname{clamp}(\alpha[1-\lambda+\lambda p]).
+\end{align}
+Table~\ref{tab:presets} lists the discrete presets. These controls change baked
+radiance statistics and transparency; ``Metal'' and ``Glass'' are UI names,
+not measured physical classes.
+
+\begin{table}[h]
+\centering
+\caption{Implemented V2.1 preset transformations.}
+\label{tab:presets}
+\begin{tabular}{llll}
+\toprule
+Preset & DC colour & SH $>0$ & opacity\\
+\midrule
+Default & unchanged & $1.00\times$ & $1.00\times$\\
+Metal & 95\% desaturated & $1.50\times$ & $1.00\times$\\
+Glass & cool tint & $1.00\times$ & $0.28\times$\\
+Plastic & saturation $1.50\times$ & $0.15\times$ & $1.00\times$\\
+Matte & unchanged & $0.00\times$ & $1.00\times$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Stable State and Export}
+Project files store the segmentation tensor, labels, material parameters,
+hidden segments, camera, iterations, and relevant UI state.
+Undo/redo uses bounded snapshots for semantic editing operations.
+
+Background export must not observe mutable GUI state. V2.1 clones the six
+Gaussian parameter tensors used by rendering, clones the integer scene mask,
+copies material assignments and camera state, and derives visibility before
+starting the worker. A dedicated renderer and material editor operate only on
+that frozen snapshot. This increases temporary VRAM usage but makes output
+independent of edits made after export begins.
+
+RGB(A), normals, and depth come directly from a snapshot render. Segmentation
+and material ID channels render each labelled subset and compose its integer ID
+using the nearest finite positive depth with non-zero opacity. The previous
+maximum-opacity rule could select a farther opaque segment over a nearer
+translucent one. ID export remains $O(S)$ BVH builds for $S$ segments; a tracer
+that returns a primitive or semantic ID in one pass is the preferred future
+solution.
+
+\section{Numerical Stability and Verification}
+Contrastive training forms positive and negative pair sets whose cardinality
+can be zero. V2.1 avoids division by zero during random subsampling and defines
+the mean of an empty selected term as a differentiable zero. Empty diagnostic
+cosine sets are handled identically. The loss therefore remains finite when a
+mini-batch has no consistent positive or negative pairs.
+
+CI runs test discovery over all test files, not a single historical module.
+The 26 CPU-safe tests cover camera rays, tiled coordinates, invalid normals,
+material transforms, CLIP aggregation, multi-view association primitives,
+training empty-set behavior, export cancellation and snapshots, depth-ordered
+IDs, project migration, scoped paths, undo/redo, visibility caching, and CLI
+startup. The full suite passes under Python 3.10 and CPU PyTorch. Runtime checks
+also pass for CUDA rasterizers, PyTorch3D, SAM, CLIP, SlangTorch, and 3DGRT on
+the evaluation machine.
+
+\input{benchmark_results.tex}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=.49\linewidth]{fig_rgb.png}\hfill
+\includegraphics[width=.49\linewidth]{fig_multi_mat.png}
+\caption{Representative baseline (left) and segment-level appearance edits
+(right). The visual change is produced by SH/opacity transformations.}
+\label{fig:qualitative}
+\end{figure}
+
+\section{Limitations}
+\begin{itemize}
+  \item SH edits do not separate reflectance from illumination and cannot
+        provide physically correct relighting, shadows, refraction, or energy
+        conservation.
+  \item Gaussian center visibility is an approximation. Explicit SAM fusion
+        can merge similar adjacent objects or fragment objects under occlusion.
+  \item Per-segment ID export is depth-correct but computationally linear in
+        the number of segments.
+  \item A frozen GPU snapshot can approach twice the scene parameter memory
+        during export. Very large scenes may require CPU staging or chunking.
+  \item Reference 3DGRT at the evaluated resolution is a settle/offline path;
+        responsive interaction depends on raster preview.
+\end{itemize}
+
+\section{Roadmap}
+The next engineering release should expose primitive IDs directly from the
+tracer, add a GPU integration test to CI on a controlled runner, replace the
+center z-buffer with rendered depth/coverage tests, and benchmark representative
+million-Gaussian scenes. The research branch should preserve V2.1's stylized
+mode while adding explicit albedo, roughness, metallicity, and environment
+lighting. GS-IR and SVG-IR provide useful decomposition objectives, while
+3DGUT offers a route to secondary rays. A later TRON-like residual model could
+capture transport not explained by the explicit parameters, but only after
+quantitative relighting datasets and held-out-view metrics are established
+\citep{perel2026tron}.
+
+\section{Conclusion}
+V2.1 turns a broad prototype into a defensible stable baseline. Its contribution
+is not a new physical material model; it is a coherent integration of 3D
+selection, reversible Gaussian appearance editing, ray-traced inspection,
+deterministic export, and regression-tested failure handling. The report and
+benchmark deliberately separate implemented facts from future research claims.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+\end{document}

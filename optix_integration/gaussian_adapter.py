@@ -19,7 +19,7 @@ satisfies the interface expected by the 3DGRT Tracer:
     .get_scale()         -> activated scale     (N, 3)
     .get_density()       -> activated density   (N, 1)
     .get_features()      -> SH coefficients     (N, F)
-    .n_active_features   int  (SH degree^2 used by renderer)
+    .n_active_features   int  (active SH degree used by renderer)
     .background()        composites background color into the ray output
 
 SAGA GaussianModel stores:
@@ -108,24 +108,23 @@ class GaussianAdapter:
         return self.density_activation(self.density)
 
     def get_features(self) -> torch.Tensor:
-        """SH coefficients (N, n_active_features).
+        """Flattened SH coefficients (N, 3 * (max_degree + 1)^2).
 
         SAGA stores features as (N, 3, (sh_degree+1)^2) or (N, F).
         We flatten and trim to the number of coefficients the active SH
         degree requires.
         """
-        feats = self._apply_mask(self._model.get_features)  # SAGA property
-        # feats shape: (N, 3*(max_sh+1)^2) — treat as flat SH block
-        # Trim to active degree
-        n_active = self.n_active_features
-        if feats.shape[1] > n_active:
-            feats = feats[:, :n_active]
+        feats = self._apply_mask(self._model.get_features)  # (N, coeffs, RGB)
+        if feats.ndim == 3:
+            feats = feats.reshape(feats.shape[0], -1)
+        if feats.ndim != 2:
+            raise ValueError(f"expected 2D/3D SH features, got shape {tuple(feats.shape)}")
         return feats.contiguous()
 
     @property
     def n_active_features(self) -> int:
-        """Number of SH coefficients used for rendering."""
-        return (self._sh_degree + 1) ** 2 * 3  # 3 channels × n_coeffs
+        """Active SH degree, as required by the 3DGRT tracer interface."""
+        return int(self._sh_degree)
 
     @property
     def num_gaussians(self) -> int:

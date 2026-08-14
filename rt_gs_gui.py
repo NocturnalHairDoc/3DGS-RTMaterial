@@ -3,6 +3,17 @@
 # Phase 1: Baseline viewer with RGB, Segmentation, Material views.
 # Phase 2: Ray-Tracing view with depth-based normals and Blinn-Phong material shading.
 
+# Keep --help CPU-safe: CI and users can inspect the entry point before CUDA
+# extensions and GUI dependencies are installed.
+if __name__ == "__main__":
+    import sys as _early_sys
+    if any(arg in {"-h", "--help"} for arg in _early_sys.argv[1:]):
+        from argparse import ArgumentParser as _EarlyArgumentParser
+        _early_parser = _EarlyArgumentParser(description="3DGS ray-tracing viewer")
+        _early_parser.add_argument("-m", "--model_path", help="trained model directory")
+        _early_parser.print_help()
+        raise SystemExit(0)
+
 import torch
 import os
 import math
@@ -497,7 +508,7 @@ class RTGSViewerGUI:
                 self.opt.MODEL_PATH,
                 self.engine["scene"],
                 self.engine["feature"],
-                min_votes=1,
+                min_votes=2,
                 sample_rate=1.0,
             )
             if n >= 0:
@@ -540,6 +551,17 @@ class RTGSViewerGUI:
             if i not in self.material_assignments:
                 self.material_assignments[i] = {"type": "Default", "name": self.material_labels[i]}
                 self._mat_map_dirty = True
+
+    def _prune_segment_state(self):
+        """Drop UI/material state for segment IDs removed by rollback."""
+        last_segment = int(self.engine["scene"].segment_times)
+        self.hidden_segments = {sid for sid in self.hidden_segments if sid <= last_segment}
+        self.material_labels = {
+            sid: value for sid, value in self.material_labels.items() if sid <= last_segment}
+        self.material_assignments = {
+            sid: value for sid, value in self.material_assignments.items() if sid <= last_segment}
+        self._last_segment_times = -1
+        self._mat_map_dirty = True
 
     def _parse_segment_select_value(self, val):
         if val is None or val == "(No segment)":
@@ -900,8 +922,7 @@ class RTGSViewerGUI:
             try:
                 self.engine["scene"].roll_back()
                 self.engine["feature"].roll_back()
-                st = self.engine["scene"].segment_times
-                self.hidden_segments = {sid for sid in self.hidden_segments if sid <= st}
+                self._prune_segment_state()
             except Exception as e:
                 print("Roll back failed:", e)
             self._dirty = True
@@ -1238,7 +1259,8 @@ class RTGSViewerGUI:
 
                 with dpg.group(tag="_sam_driven_group", show=False):
                     dpg.add_text("Needs sam_masks + mask_scales", color=[160, 160, 160])
-                    dpg.add_button(label="Run SAM Segment",
+                    dpg.add_text("V2.2: cross-view anchor graph", color=[160, 160, 160])
+                    dpg.add_button(label="Run SAM Instance Graph",
                                    callback=lambda: setattr(self, 'sam_driven_flag', True))
 
                 dpg.add_separator()

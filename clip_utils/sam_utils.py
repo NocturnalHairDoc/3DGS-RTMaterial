@@ -240,8 +240,6 @@ def seed_everything(seed_value):
     random.seed(seed_value)
     np.random.seed(seed_value)
     torch.manual_seed(seed_value)
-    os.environ['PYTHONHASHSEED'] = str(seed_value)
-    
     if torch.cuda.is_available(): 
         torch.cuda.manual_seed(seed_value)
         torch.cuda.manual_seed_all(seed_value)
@@ -256,7 +254,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--image_root', type=str, required=True)
     parser.add_argument('--downsample', type=int, default=1)
-    parser.add_argument('--sam_ckpt_path', type=str, default="/home/cenjiazhong/SegmentAnythingin3D/dependencies/sam_ckpt/sam_vit_h_4b8939.pth")
+    parser.add_argument('--sam_ckpt_path', type=str, required=True)
     args = parser.parse_args()
     torch.set_default_dtype(torch.float32)
 

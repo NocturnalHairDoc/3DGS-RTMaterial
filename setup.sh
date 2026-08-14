@@ -69,4 +69,4 @@ python "$REPO_DIR/runtime_check.py"
 
 echo
 echo "Installation complete. Activate with: conda activate gaussian_splatting_v2"
-echo "Run an available scene with: python rt_gs_gui_sh_clip.py"
+echo "Run V3 with: python rt_gs_gui_v3.py -m /absolute/model/path"

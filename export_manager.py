@@ -7,8 +7,10 @@ from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from time import monotonic
 from typing import Callable
+import copy
 
 import numpy as np
+import torch
 
 
 def linear_to_srgb(rgb: np.ndarray) -> np.ndarray:
@@ -36,6 +38,68 @@ class ExportEvent:
 
 class ExportCancelled(RuntimeError):
     pass
+
+
+class FrozenGaussianSnapshot:
+    """Tensor clone exposing the subset of GaussianModel used by exporters."""
+
+    def __init__(self, model) -> None:
+        for name in ("_xyz", "_rotation", "_scaling", "_opacity",
+                     "_features_dc", "_features_rest"):
+            setattr(self, name, getattr(model, name).detach().clone())
+        self.active_sh_degree = int(getattr(model, "active_sh_degree", 3))
+
+    @property
+    def get_xyz(self):
+        return self._xyz
+
+    @property
+    def get_features(self):
+        return torch.cat((self._features_dc, self._features_rest), dim=1)
+
+
+@dataclass(frozen=True)
+class ExportSnapshot:
+    """Immutable export inputs captured before the background worker starts."""
+
+    scene: FrozenGaussianSnapshot
+    scene_mask: torch.Tensor
+    visible_mask: torch.Tensor | None
+    material_assignments: dict
+    camera: object
+
+
+def capture_export_snapshot(model, camera, material_assignments, hidden_segments) -> ExportSnapshot:
+    scene_mask = model._mask.detach().clone()
+    hidden = torch.zeros_like(scene_mask, dtype=torch.bool)
+    for segment_id in hidden_segments:
+        hidden |= scene_mask == int(segment_id) + 1
+    visible = (~hidden).contiguous() if bool(hidden.any().item()) else None
+    return ExportSnapshot(
+        scene=FrozenGaussianSnapshot(model),
+        scene_mask=scene_mask,
+        visible_mask=visible,
+        material_assignments=copy.deepcopy(material_assignments),
+        camera=copy.deepcopy(camera),
+    )
+
+
+def compose_depth_ordered_ids(layers, height: int, width: int,
+                              opacity_threshold: float = 1e-4) -> np.ndarray:
+    """Compose integer IDs by the nearest valid depth, never by opacity size."""
+    ids = np.zeros((height, width), dtype=np.uint16)
+    best_depth = np.full((height, width), np.inf, dtype=np.float32)
+    for value, output in layers:
+        if value <= 0 or value > np.iinfo(np.uint16).max:
+            raise ValueError(f"export ID {value} is outside uint16 range")
+        depth = np.asarray(output["depth"], dtype=np.float32)
+        opacity = np.asarray(output["opacity"], dtype=np.float32)[..., 0]
+        hit = (np.isfinite(depth) & (depth > 0.0)
+               & np.isfinite(opacity) & (opacity > opacity_threshold))
+        replace = hit & (depth < best_depth)
+        best_depth[replace] = depth[replace]
+        ids[replace] = np.uint16(value)
+    return ids
 
 
 class ExportManager:

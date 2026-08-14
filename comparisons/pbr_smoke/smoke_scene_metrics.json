@@ -1,0 +1,41 @@
+{
+  "scene": "smoke_scene",
+  "camera": "_DSC8679",
+  "panel": "comparisons/pbr_smoke/smoke_scene__DSC8679_pbr_rounds.png",
+  "metrics": {
+    "v22_stylized": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.3047315776348114,
+      "contrast": 0.1805020123720169
+    },
+    "dielectric": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.40429219603538513,
+      "contrast": 0.19442525506019592,
+      "highlight_fraction": 0.00010630005272105336,
+      "secondary_seconds": 0.04399921499862103
+    },
+    "metal": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.47390276193618774,
+      "contrast": 0.19063135981559753,
+      "highlight_fraction": 0.0010630005272105336,
+      "secondary_seconds": 0.04552672900172183
+    },
+    "glass": {
+      "finite_fraction": 1.0,
+      "mean_luminance": 0.33756792545318604,
+      "contrast": 0.12635967135429382,
+      "highlight_fraction": 1.574815541971475e-05,
+      "secondary_seconds": 0.0439497150000534
+    },
+    "runtime": {
+      "primary_seconds": 0.032580455001152586,
+      "shadow_seconds": 0.007892316003562883,
+      "mean_visibility": 0.34649303555488586,
+      "gaussians": 61380,
+      "width": 618,
+      "height": 411
+    }
+  }
+}
