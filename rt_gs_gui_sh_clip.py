@@ -75,6 +75,7 @@ from clip_utils.material_clip import (
     score_crop_against_material_prompts,
     select_confident_material,
     topk_materials,
+    MATERIAL_CLIP_PROMPTS,
     MATERIAL_PARAM_PRESETS,
 )
 from viewer.utils import scoped_output_path, visibility_cache_key
