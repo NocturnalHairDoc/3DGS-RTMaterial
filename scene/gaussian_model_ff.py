@@ -11,6 +11,7 @@
 
 import torch
 import numpy as np
+from torch import nn
 from utils.general_utils import inverse_sigmoid, get_expon_lr_func, build_rotation
 from segmentation.utils import has_selected_points
 import os

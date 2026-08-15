@@ -54,8 +54,11 @@ python -m pip install --no-build-isolation --no-deps \
 
 echo "=== [4/5] Fetching and installing 3DGRT ==="
 if [[ ! -f "$REPO_DIR/3dgrut/setup.py" ]]; then
-    git clone --no-checkout "$THREEDGRUT_URL" "$REPO_DIR/3dgrut"
-    git -C "$REPO_DIR/3dgrut" checkout --detach "$THREEDGRUT_COMMIT"
+    bootstrap_dir="$(mktemp -d /tmp/3dgs-rtm-3dgrut.XXXXXX)"
+    git clone --no-checkout "$THREEDGRUT_URL" "$bootstrap_dir/3dgrut"
+    git -C "$bootstrap_dir/3dgrut" checkout --detach "$THREEDGRUT_COMMIT"
+    mkdir -p "$REPO_DIR/3dgrut"
+    cp -a "$bootstrap_dir/3dgrut/." "$REPO_DIR/3dgrut/"
 fi
 if [[ ! -f "$REPO_DIR/3dgrut/threedgrt_tracer/dependencies/optix-dev/include/optix.h" ]]; then
     git -C "$REPO_DIR/3dgrut" submodule update --init --depth 1 \
