@@ -458,6 +458,11 @@ class SHMaterialViewer(RTGSViewerGUI):
     def _selected_export_channel(self):
         return dpg.get_value("_export_channel") if dpg.does_item_exist("_export_channel") else "RGB"
 
+    def _capture_export_snapshot(self):
+        return capture_export_snapshot(
+            self.engine["scene"], self.camera, self.material_assignments,
+            self.hidden_segments)
+
     def _write_export_image(self, path, renderer, snapshot, editor, channel):
         if channel == "Segmentation ID":
             data = self._render_export_ids(renderer, snapshot, editor, material=False)
@@ -506,9 +511,7 @@ class SHMaterialViewer(RTGSViewerGUI):
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             estimate_mib = estimate_frame_bytes(width, height) / 1024**2
             self._set_io_status(f"Queued PNG {width}×{height}; estimated working buffers {estimate_mib:.0f} MiB")
-            snapshot = capture_export_snapshot(
-                self.engine["scene"], self.camera, self.material_assignments,
-                self.hidden_segments)
+            snapshot = self._capture_export_snapshot()
             channel = self._selected_export_channel()
             self._clip_network = None
             torch.cuda.empty_cache()
@@ -543,9 +546,7 @@ class SHMaterialViewer(RTGSViewerGUI):
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             estimate_mib = estimate_frame_bytes(width, height) / 1024**2
             self._set_io_status(f"Queued MP4 {width}×{height}; estimated working buffers {estimate_mib:.0f} MiB")
-            snapshot = capture_export_snapshot(
-                self.engine["scene"], self.camera, self.material_assignments,
-                self.hidden_segments)
+            snapshot = self._capture_export_snapshot()
             base = snapshot.camera
             self._clip_network = None
             torch.cuda.empty_cache()
@@ -760,6 +761,20 @@ class SHMaterialViewer(RTGSViewerGUI):
         self._dirty = True
         mode = "adaptive raster interaction" if enabled else "full OptiX interaction"
         self._set_io_status(f"RT preview mode: {mode}")
+
+    def _clip_prompt_changed(self):
+        """Keep prompt-based application available after a low-confidence detect."""
+        if not dpg.does_item_exist("_clip_apply_btn"):
+            return
+        prompt = (dpg.get_value("_clip_prompt_input") or "").strip()
+        detected = self._clip_detected_material
+        if prompt:
+            dpg.configure_item("_clip_apply_btn", label="Apply prompt", enabled=True)
+        elif detected:
+            dpg.configure_item(
+                "_clip_apply_btn", label=f"Confirm [{detected}]", enabled=True)
+        else:
+            dpg.configure_item("_clip_apply_btn", label="Apply", enabled=False)
 
     # ──────────────────────────── CLIP auto-detection ───────────────────────
 
@@ -1019,6 +1034,7 @@ class SHMaterialViewer(RTGSViewerGUI):
                 hint="blue glass / brushed metal / shiny gold…",
                 tag="_clip_prompt_input",
                 width=-1,
+                callback=lambda: self._clip_prompt_changed(),
             )
 
             dpg.add_separator()

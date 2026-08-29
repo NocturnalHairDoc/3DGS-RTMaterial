@@ -38,6 +38,9 @@ Launch:
 ```bash
 conda activate gaussian_splatting_v2
 python rt_gs_gui_v3.py -m /absolute/model/path --scale 1.5
+
+# Universal import and automatic initial segmentation
+python rt_gs_gui_v3.py --one-click -m /absolute/model/or/scene.ply
 ```
 
 Choose `Ray-Tracing → PBR-lite`, select a segment, set albedo, roughness,
@@ -47,6 +50,17 @@ state stores segment PBR assignments, HDR path, and exposure; older state files
 are migrated in memory. Dense fields are rebuilt from those assignments after
 load, rollback, clear, undo, and redo. Refraction reads the rasterized IOR field
 rather than the currently selected UI value.
+
+The one-click resolver accepts a model directory, `point_cloud` directory, or
+direct trained PLY and selects the latest usable iteration. SAGA assets retain
+their learned feature/gate pair. Plain 3DGS scenes use deterministic
+geometry/appearance proxy features and KMeans segmentation. These proxy
+clusters may not correspond to semantic objects.
+
+`Project & Export → Render pipeline` freezes the chosen PBR pipeline together
+with dense material tensors, environment, exposure, lighting, shadows, and
+secondary-ray toggles. PNG, MP4, and PNG-sequence workers therefore use the
+same PBR/G-buffer/compositor path as the settled interactive preview.
 
 ## Real-data comparison
 
@@ -62,14 +76,14 @@ interactive use remains segment-specific.
 | Mip-NeRF360 bonsai | 1,215,289 | 390×260 | 10.4 | 1.0 |
 | Mip-NeRF360 counter | 1,070,314 | 389×260 | 6.9 | 1.0 |
 
-The generated image is `comparisons/pbr_report/v22_vs_v3_multi_scene.png`; raw
-per-scene and aggregate measurements are JSON files under `comparisons/`.
+Per-scene and aggregate measurements are committed as JSON files under
+`comparisons/`.
 Timing is a synchronized single-machine smoke measurement of primary, shadow,
 and secondary tracing plus composition. It excludes property-map rasterization,
 GUI work, and image encoding, so it is not an end-to-end viewer frame rate or a
 cross-hardware benchmark.
-The background export path remains the retained Stylized SH exporter in this
-release; PBR-lite still-image and turntable export are future work.
+PBR-lite still-image and turntable export were validated on both a learned-SAGA
+scene and a plain degree-0 SH scene imported from another 3DGS implementation.
 
 ## Evidence and design basis
 
@@ -81,27 +95,10 @@ release; PBR-lite still-image and turntable export are future work.
 - The [Khronos glTF PBR overview](https://www.khronos.org/gltf/pbr) provides the
   conventional metallic-roughness parameter interpretation.
 
-## Known limitations and recommended V4 work
+## Known limitations
 
 The current images show strong ellipse/splat contour responses in PBR modes,
 especially on million-Gaussian indoor scenes. These originate in the local
 3DGRT intersection normals and cannot be fully repaired with image-space depth
 derivatives. Material values are also user-authored, so baked illumination can
 remain in the albedo initialization.
-
-Recommended next work, in order:
-
-1. Train or optimize multi-view-consistent surface normals and introduce
-   confidence-weighted normal/depth regularization before expanding the BRDF.
-2. Add intrinsic decomposition for albedo, roughness, and lighting with
-   multi-view photometric losses, while keeping manual overrides as supervision.
-3. Replace the single visibility ray with stochastic soft shadows and denoising;
-   add roughness-aware multi-sample reflection and transmission.
-4. Introduce per-segment material priors and boundary-aware regularization tied
-   to the V2.2 cross-view instance graph to prevent parameter bleeding.
-5. Evaluate held-out views with PSNR/SSIM/LPIPS plus relighting-specific user
-   studies and ablations for G-buffer stabilization, HDR IBL, and secondary rays.
-
-This sequence addresses the visible geometry/normal failure first; fitting more
-complex reflectance on an unstable G-buffer would otherwise amplify the same
-artifact.

@@ -2,11 +2,11 @@
 
 > Semester project for **SFU CMPT 743** (Visual Computing).
 
-This project combines **3D Gaussian Splatting** segmentation (SAGA), **OptiX
-ray tracing**, retained spherical-harmonic (SH) stylization, and a new manual
-**PBR-lite** path. V3 adds dense per-Gaussian material fields, segment-level
-editing, HDR lighting, Cook–Torrance GGX, shadows, and hybrid reflection /
-refraction rays while deliberately leaving inverse rendering for a later stage.
+This project provides a GUI for segmenting **3D Gaussian Splatting** scenes,
+assigning materials, and rendering the edited result. It supports SAGA features,
+OptiX ray tracing, spherical-harmonic (SH) editing, and a manually controlled
+**PBR-lite** renderer. PBR-lite is a forward-rendering mode; it does not estimate
+materials or lighting from the training images.
 
 ---
 
@@ -31,7 +31,7 @@ refraction rays while deliberately leaving inverse rendering for a later stage.
 ## Features
 
 - **Dual material pipeline**
-  - *Stylized (SH Edit)* — the complete V2.2 workflow, unchanged
+  - *Stylized (SH Edit)* — the V2.2 SH-edit workflow
   - *PBR-lite* — manual albedo, roughness, metallic, opacity, and IOR
   - *Original* and *Compare Stylized/PBR* inspection modes
 
@@ -43,7 +43,7 @@ refraction rays while deliberately leaving inverse rendering for a later stage.
   - 3DGRT normals, depth, and opacity as the G-buffer
   - Shadow visibility and 3DGUT-style hybrid reflection / refraction rays
 
-- **4 View Modes**
+- **View modes**
   - *RGB (Baseline)* — standard 3DGS splatting render
   - *Segmentation* — per-segment color overlay
   - *Material* — flat material-type color preview
@@ -65,9 +65,9 @@ refraction rays while deliberately leaving inverse rendering for a later stage.
   - Adaptive interaction uses rasterization while dragging and settles to a
     full OptiX frame after release
 
-- **Material System** — 5 presets that alter SH colour, view-dependent SH terms, and opacity
+- **Material presets** — five presets that alter SH color, view-dependent SH terms, and opacity
 
-  | Material | DC/base colour | Higher-order SH | Opacity |
+  | Material | DC/base color | Higher-order SH | Opacity |
   |----------|----------------|-----------------|---------|
   | Default  | unchanged | unchanged | unchanged |
   | Metal    | 95% desaturated | ×1.5 | unchanged |
@@ -85,13 +85,17 @@ refraction rays while deliberately leaving inverse rendering for a later stage.
     Gaussian-level refinement restricted to instance-boundary anchors
   - Save / load segment masks
 
-- **CLIP Material Panel** — classifies a rendered crop of the selected segment against material text prompts, or converts prompts such as `"blue glass"` and `"brushed metal"` into continuous SH/opacity parameters
+- **CLIP Material Panel** — compares a rendered crop with material text prompts,
+  or converts prompts such as `"blue glass"` and `"brushed metal"` into SH and
+  opacity parameters
 
 - **Project State** — saves and restores the complete segmentation mask, material names/parameters, hidden segments, camera pose, and relevant UI settings in a compressed `.npz`
 
-- **Offline Export (Stylized mode)** — immutable scene/state snapshots, background PNG/MP4/PNG-sequence
-  export with progress, cancellation, tiled 4K/8K rendering and
-  RGB/RGBA/depth/normals/depth-ordered ID/comparison channels
+- **Offline Export** — captures the current scene state before running
+  PNG/MP4/PNG-sequence export in the background, with progress and cancellation. The output
+  pipeline can be selected independently as Current RT mode, PBR-lite,
+  Stylized (SH Edit), or Original; RGB/RGBA/depth/normals/depth-ordered ID and
+  comparison channels remain available.
 
 ---
 
@@ -151,33 +155,84 @@ pip install imageio einops slangtorch==1.3.18 "setuptools<80"
 
 ## Usage
 
+第一次使用 GUI 分割自己的物体，请按仓库内的中文逐步教程操作：
+**[在 GUI 中分割自己的物体：逐步复现教程](docs/GUI_OBJECT_SEGMENTATION_TUTORIAL_ZH.md)**。
+教程覆盖手动点选、自动聚类、多照片 SAM、视觉检查、掩码/完整工程保存，以及
+关闭 GUI 后重新加载验证。
+
 ```bash
 conda activate gaussian_splatting_v2
 python rt_gs_gui_v3.py -m /absolute/model/path --scale 1.5
+
+# One-click import, latest-iteration discovery, and automatic segmentation
+python rt_gs_gui_v3.py --one-click -m /absolute/model/or/point_cloud/or/scene.ply
 
 # Optional HDR latitude-longitude environment
 python rt_gs_gui_v3.py -m /absolute/model/path --environment /absolute/studio.hdr
 ```
 
-`-m` is required and must point to a compatible trained scene directory.
+`-m` may point to a model directory, a `point_cloud` directory, or a trained
+PLY. If it is omitted, the viewer opens a directory chooser. Iterations are
+discovered automatically; `-s` and `-f` can still select explicit iterations.
 
-The viewer expects a trained 3DGS scene with both the iteration-30000 scene
-PLY and iteration-10000 contrastive feature PLY/scale gate. Model output is
-intentionally not stored in Git.
+SAGA scenes use their learned contrastive feature PLY and scale gate. A plain
+3DGS PLY is also accepted: V3 constructs deterministic geometry/appearance
+proxy features, fits the camera, and uses MiniBatchKMeans for the initial
+segments. Proxy segmentation is an import fallback and is less semantic than a
+scene trained with SAGA. Use `--dry-run` to validate asset discovery without
+starting CUDA or the GUI, and `--fit-camera always|never` to override automatic
+camera policy.
 
-### Diagnostics and tests
+### Select objects in several photos and fuse them into 3D
+
+This workflow is intended for selecting one physical object in two or more
+calibrated training photographs. It requires the scene's COLMAP camera
+reconstruction and precomputed SAM `segment-everything` tensors. Process one
+object per selection manifest; build multi-object results only after the
+individual objects have been verified.
+
+The selector provides two brush modes at the bottom of the window:
+
+- **Whole-object brush** (default) chooses the largest eligible SAM proposal
+  touched by each stroke sample. Use it first when SAM already has a proposal
+  covering most or all of the object.
+- **Fine-parts brush** chooses smaller eligible proposals along the stroke and
+  unions them in the current photograph. Use it to add handles, thin parts,
+  holes, or object regions missed by the whole-object proposal.
+
+Left-drag paints/adds proposals and right-drag removes touched proposals.
+Changing brush mode does not clear the proposals already selected in that
+photograph, so the usual workflow is Whole-object first and Fine-parts for
+local completion. `Clear this photo` resets only the current photograph.
+Photographs with no selected proposal are ignored during 3D fusion; they are
+not treated as evidence that the object is absent.
 
 ```bash
-python tools/runtime_check.py
+# 1. Open the selector. Whole-object brush prefers the largest eligible SAM
+#    proposal under a left-drag; Fine-parts brush accumulates small parts.
+#    Right-drag erases. Parts in one view are unioned before 3D voting.
+python -m segmentation.multiview_selection \
+  --source /absolute/dataset/counter \
+  --masks /absolute/dataset/counter/sam_masks \
+  --output segmentation_res/my_selection.json
 
-# Included 61,380-Gaussian OptiX benchmark
-python -m tools.benchmarks.gpu_optix_smoke
+# 2a. Fuse the selected 2D proposals and open the colored result in the viewer.
+python rt_gs_gui_v3.py -m /absolute/model/counter \
+  --multiview-selection segmentation_res/my_selection.json
+
+# 2b. Or create a reusable per-Gaussian mask without opening the GUI.
+python -m segmentation.sam_driven -m /absolute/model/counter \
+  --selection segmentation_res/my_selection.json \
+  -o segmentation_res/my_selection_mask.pt \
+  --diagnostics segmentation_res/my_selection_diagnostics.json
 ```
 
-`tools/runtime_check.py` checks the Python dependencies, CUDA runtime, GPU
-architecture and downloaded source trees. The development test suite is kept
-locally and is not distributed with the repository. OptiX diagnostics require
-an NVIDIA GPU and a trained scene.
+The fused object receives one color in the `Segmentation` view; unselected
+Gaussians remain dark. Each Gaussian must be supported by `min_votes` selected
+views, suppressing one-view background leakage. Select proposals tightly around
+the same complete object and include views from different sides. Reflective or
+transparent objects, severe occlusion, and missing Gaussians can still produce
+incomplete boundaries.
 
 ### Training a scene (from scratch)
 
@@ -221,6 +276,8 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 │   └── sh_editor.py           #   SH-based material editor
 ├── segmentation/              # SAM/SAGA segmentation and instance association
 │   ├── sam_driven.py          #   Standalone segmentation entry module
+│   ├── multiview_selection.py #   Native multi-photo SAM proposal selector
+│   ├── membership_io.py       #   Gaussian mask/confidence loading
 │   ├── instance_graph.py      #   Cross-view instance graph
 │   └── utils.py               #   Mask association and visibility helpers
 ├── viewer/                    # Viewer state, export and interaction support
@@ -231,7 +288,7 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 │   └── utils.py               #   Shared viewer helpers
 ├── training/                  # Training-only utilities
 │   └── utils.py               #   NaN-safe contrastive loss helpers
-├── tools/                     # Setup, diagnostics and reproducible benchmarks
+├── tools/                     # Setup, diagnostics and benchmarks
 │   ├── runtime_check.py       #   Dependency/GPU architecture diagnostics
 │   ├── setup/                 #   Downloaded-source compatibility patches
 │   └── benchmarks/
@@ -270,8 +327,10 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
   multi-view-consistent normals.
 - Secondary rays are single-bounce hybrid rays and shadows use one visibility
   ray. Rough transmission is an approximation rather than spectral volume tracing.
-- Background export currently renders the retained Stylized SH pipeline; PBR-lite
-  export is planned for the next renderer/export integration pass.
+- PBR-lite PNG and turntable export use the same frozen dense material maps,
+  OptiX G-buffer, HDR/exposure, shadows, and secondary-ray settings as the
+  interactive PBR renderer. PBR export currently renders as one full-resolution
+  frame, so very large PBR outputs require enough VRAM for that frame.
 - SAM-driven fusion uses a projected-center z-buffer rather than full Gaussian
   coverage; thin structures and heavy occlusion can still fragment or merge.
 - Segmentation errors and overlapping Gaussians can cause material bleeding at object boundaries.
@@ -280,18 +339,7 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 - MP4 dimensions must be even. Very large exports still require enough VRAM for one tile and the scene BVH.
 - A frozen export duplicates render-critical scene tensors on the GPU so an
   in-flight export cannot change when the GUI is edited; very large scenes may
-  need CPU staging in a future release.
-
-### Interactive preview setting
-
-Adaptive raster preview can be disabled when profiling full OptiX interaction:
-
-```bash
-export RTM_ADAPTIVE_RT_PREVIEW=0
-```
-
-The same setting is available in the Ray-Tracing panel. The corrected OptiX
-camera transform is now the only supported camera path.
+  exceed available GPU memory.
 
 ---
 

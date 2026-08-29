@@ -287,8 +287,19 @@ class GaussianModel:
 
         extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
         extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
-        assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3
-        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
+        expected_rest = 3 * (self.max_sh_degree + 1) ** 2 - 3
+        if len(extra_f_names) > expected_rest or len(extra_f_names) % 3:
+            raise ValueError(
+                f"unsupported SH layout: {len(extra_f_names)} f_rest fields; "
+                f"expected at most {expected_rest} and a multiple of 3")
+        coefficients = len(extra_f_names) // 3 + 1
+        inferred_degree = int(round(np.sqrt(coefficients))) - 1
+        if (inferred_degree + 1) ** 2 != coefficients:
+            raise ValueError(
+                f"f_rest field count {len(extra_f_names)} does not describe a complete SH degree")
+        # Keep a uniform degree-3 tensor for the raster/OptiX adapters while
+        # accepting degree-0/1/2 inputs. Missing higher orders are exactly zero.
+        features_extra = np.zeros((xyz.shape[0], expected_rest))
         for idx, attr_name in enumerate(extra_f_names):
             features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
         # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
@@ -316,7 +327,7 @@ class GaussianModel:
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
-        self.active_sh_degree = self.max_sh_degree
+        self.active_sh_degree = min(self.max_sh_degree, inferred_degree)
 
         self.segment_times = 0
         self._mask = torch.ones((self._xyz.shape[0],), dtype=torch.float, device="cuda")

@@ -7,10 +7,16 @@ if __name__ == "__main__":
         from argparse import ArgumentParser as _EarlyArgumentParser
         parser = _EarlyArgumentParser(description="3DGS-RTMaterial V3 PBR-lite viewer")
         parser.add_argument("-m", "--model_path")
-        parser.add_argument("-f", "--feature_iteration", type=int, default=10000)
-        parser.add_argument("-s", "--scene_iteration", type=int, default=30000)
+        parser.add_argument("-f", "--feature_iteration", type=int, default=-1)
+        parser.add_argument("-s", "--scene_iteration", type=int, default=-1)
         parser.add_argument("--scale", type=float, default=2.0)
         parser.add_argument("--environment", help="optional .hdr/.exr latitude-longitude map")
+        parser.add_argument("--one-click", action="store_true")
+        parser.add_argument("--fit-camera", choices=("auto", "always", "never"), default="auto")
+        parser.add_argument("--auto-segment", choices=("none", "auto", "hdbscan", "kmeans", "sam"))
+        parser.add_argument("--multiview-selection")
+        parser.add_argument("--clusters", type=int, default=8)
+        parser.add_argument("--dry-run", action="store_true")
         parser.print_help()
         raise SystemExit(0)
 
@@ -35,9 +41,13 @@ from materials.pbr_lite import (
     stabilize_gbuffer_normals,
 )
 from viewer.project_state import load_project_state
+from viewer.scene_import import discover_scenes, resolve_scene_assets
+from viewer.export_manager import capture_export_snapshot
 from rt_gs_gui import RTGSConfig
 from rt_gs_gui_sh_clip import SHMaterialViewer
 from scene import FeatureGaussianModel, GaussianModel
+from scene.cameras import Camera
+from utils.graphics_utils import focal2fov, fov2focal
 
 
 class PBRLiteViewer(SHMaterialViewer):
@@ -289,6 +299,177 @@ class PBRLiteViewer(SHMaterialViewer):
         )
         return shaded.permute(2, 0, 1)
 
+    def _selected_export_pipeline(self):
+        selected = (dpg.get_value("_export_pipeline")
+                    if dpg.does_item_exist("_export_pipeline") else "Current RT mode")
+        if selected == "Current RT mode":
+            selected = (dpg.get_value("_rt_submode")
+                        if dpg.does_item_exist("_rt_submode") else "Stylized (SH Edit)")
+        if selected == "Compare Stylized/PBR":
+            selected = "PBR-lite"
+        return selected
+
+    def _capture_export_snapshot(self):
+        environment = self._pbr_compositor.environment
+        render_state = {
+            "pipeline": self._selected_export_pipeline(),
+            "albedo": self._pbr_store.albedo.detach().clone(),
+            "roughness": self._pbr_store.roughness.detach().clone(),
+            "metallic": self._pbr_store.metallic.detach().clone(),
+            "opacity": self._pbr_store.opacity.detach().clone(),
+            "ior": self._pbr_store.ior.detach().clone(),
+            "environment": environment.pixels.detach().clone(),
+            "environment_exposure": float(environment.exposure),
+            "exposure": float(dpg.get_value("_pbr_exposure")),
+            "light_azimuth": float(dpg.get_value("_pbr_light_az")),
+            "light_elevation": float(dpg.get_value("_pbr_light_el")),
+            "light_intensity": float(dpg.get_value("_pbr_light_intensity")),
+            "shadows": bool(dpg.get_value("_pbr_shadows")),
+            "secondary_rays": bool(dpg.get_value("_pbr_secondary_rays")),
+        }
+        return capture_export_snapshot(
+            self.engine["scene"], self.camera, self.material_assignments,
+            self.hidden_segments, render_state=render_state)
+
+    @staticmethod
+    def _export_raster_camera(orbit, width, height):
+        pose = orbit.pose_movecenter if orbit.rot_mode == 1 else orbit.pose_objcenter
+        fovy = orbit.fovy * math.pi / 180.0
+        focal_y = fov2focal(fovy, height)
+        fovx = focal2fov(focal_y, width)
+        camera = Camera(
+            colmap_id=0, R=pose[:3, :3], T=pose[:3, 3], FoVx=fovx, FoVy=fovy,
+            image=torch.zeros(3, height, width), gt_alpha_mask=None,
+            image_name=None, uid=0,
+        )
+        camera.feature_height, camera.feature_width = height, width
+        return camera
+
+    @staticmethod
+    def _export_world_rays(renderer, orbit):
+        batch = renderer._ray_batch(orbit)
+        transform = batch.T_to_world[0]
+        rotation, translation = transform[:3, :3], transform[:3, 3]
+        directions = F.normalize(batch.rays_dir[0] @ rotation.T, dim=-1)
+        origins = batch.rays_ori[0] @ rotation.T + translation
+        return origins, directions
+
+    def _render_pbr_export(self, renderer, snapshot):
+        state = snapshot.render_state
+        primary = renderer.render(snapshot.camera, segment_mask=snapshot.visible_mask)
+        if primary is None:
+            raise RuntimeError("OptiX returned no PBR export frame")
+        raster_camera = self._export_raster_camera(
+            snapshot.camera, renderer.width, renderer.height)
+        pipe = type('Pipe', (), {
+            'convert_SHs_python': self.opt.convert_SHs_python,
+            'compute_cov3D_python': self.opt.compute_cov3D_python,
+            'debug': self.opt.debug,
+        })()
+        black = torch.zeros(3, device="cuda")
+        hide_mask = None if snapshot.visible_mask is None else ~snapshot.visible_mask
+        coverage = render(
+            raster_camera, snapshot.scene, pipe, black,
+            override_color=torch.ones_like(state["albedo"]),
+            filtered_mask=hide_mask,
+        )["render"].permute(1, 2, 0)[..., :1].clamp(0, 1)
+        divisor = coverage.clamp_min(1e-5)
+
+        def raster_field(values):
+            return render(
+                raster_camera, snapshot.scene, pipe, black,
+                override_color=values, filtered_mask=hide_mask,
+            )["render"].permute(1, 2, 0) / divisor
+
+        albedo = raster_field(state["albedo"]).clamp(0, 1)
+        packed = raster_field(torch.cat(
+            (state["roughness"], state["metallic"], state["opacity"]), dim=1))
+        encoded_ior = ((state["ior"] - 1.0) / 1.5).expand(-1, 3)
+        ior = 1.0 + 1.5 * raster_field(encoded_ior)[..., :1].clamp(0, 1)
+        valid = coverage > 1e-5
+        albedo = torch.where(valid, albedo, torch.zeros_like(albedo))
+        roughness = torch.where(valid, packed[..., :1].clamp(0.04, 1),
+                                torch.full_like(coverage, 0.5))
+        metallic = torch.where(valid, packed[..., 1:2].clamp(0, 1),
+                               torch.zeros_like(coverage))
+        opacity = torch.where(valid, packed[..., 2:3].clamp(0, 1),
+                              torch.ones_like(coverage))
+
+        normals, depth = primary["normals"], primary["depth"]
+        origins, directions = self._export_world_rays(renderer, snapshot.camera)
+        view_dirs = -directions
+        positions = reconstruct_world_positions(origins, directions, depth)
+        normals = stabilize_gbuffer_normals(normals, positions, depth, view_dirs)
+        azimuth = math.radians(state["light_azimuth"])
+        elevation = math.radians(state["light_elevation"])
+        light_dir = F.normalize(torch.tensor([
+            math.cos(elevation) * math.sin(azimuth), math.sin(elevation),
+            math.cos(elevation) * math.cos(azimuth),
+        ], device="cuda"), dim=0)
+        light_radiance = torch.full(
+            (3,), state["light_intensity"], device="cuda", dtype=torch.float32)
+        hit = (depth > 0).unsqueeze(-1)
+        epsilon = (depth[depth > 0].median() * 1e-2
+                   if torch.any(depth > 0) else depth.new_tensor(1e-2))
+        visibility = torch.ones_like(roughness)
+        if state["shadows"]:
+            traced = renderer.trace_world_rays(
+                positions + normals * epsilon,
+                light_dir.view(1, 1, 3).expand_as(positions))
+            if traced is not None:
+                visibility = torch.where(
+                    hit, (1 - traced["opacity"]).clamp(0.03, 1),
+                    torch.ones_like(visibility))
+
+        environment = HDREnvironment(
+            state["environment"], exposure=state["environment_exposure"])
+        compositor = PBRLiteCompositor(environment, exposure=state["exposure"])
+        reflected_linear = refracted_linear = None
+        if state["secondary_rays"]:
+            reflected_dirs = reflection_directions(directions, normals, roughness)
+            reflected = renderer.trace_world_rays(
+                positions + normals * epsilon, reflected_dirs)
+            if reflected is not None:
+                reflected_linear = torch.where(
+                    reflected["opacity"] > 1e-3,
+                    srgb_to_linear(reflected["rgb"]),
+                    environment.sample(reflected_dirs, roughness))
+            refracted_dirs = refraction_directions(directions, normals, ior)
+            refracted = renderer.trace_world_rays(
+                positions - normals * epsilon, refracted_dirs)
+            if refracted is not None:
+                refracted_linear = torch.where(
+                    refracted["opacity"] > 1e-3,
+                    srgb_to_linear(refracted["rgb"]),
+                    environment.sample(refracted_dirs, roughness))
+        shaded = compositor.shade(
+            srgb_to_linear(albedo), roughness, metallic, opacity, normals, depth,
+            view_dirs, light_dir, light_radiance, visibility,
+            primary_rgb=primary["rgb"], reflected_linear=reflected_linear,
+            refracted_linear=refracted_linear,
+            gbuffer_opacity=primary["opacity"],
+        )
+        output = dict(primary)
+        # The shared writer expects linear RGB and performs the final sRGB conversion.
+        output["rgb"] = srgb_to_linear(shaded)
+        if any(not torch.isfinite(value).all() for value in output.values()):
+            raise RuntimeError("PBR export output contains invalid values")
+        return {key: value.float().cpu().numpy() for key, value in output.items()}
+
+    @torch.no_grad()
+    def _render_export_output(self, renderer, snapshot, editor,
+                              apply_materials=True, segment_mask=None):
+        pipeline = (snapshot.render_state or {}).get("pipeline", "Stylized (SH Edit)")
+        if not apply_materials or segment_mask is not None or pipeline == "Original":
+            return super()._render_export_output(
+                renderer, snapshot, editor, apply_materials=False,
+                segment_mask=segment_mask)
+        if pipeline == "PBR-lite":
+            return self._render_pbr_export(renderer, snapshot)
+        return super()._render_export_output(
+            renderer, snapshot, editor, apply_materials=True,
+            segment_mask=segment_mask)
+
     @torch.no_grad()
     def _render_raytracing(self, cam, pipe):
         mode = (dpg.get_value("_rt_submode") if dpg.does_item_exist("_rt_submode")
@@ -321,6 +502,13 @@ class PBRLiteViewer(SHMaterialViewer):
                 "_rt_submode",
                 items=["Stylized (SH Edit)", "PBR-lite", "Original", "Compare Stylized/PBR"],
                 default_value="Stylized (SH Edit)",
+            )
+        if dpg.does_item_exist("_project_export_header"):
+            dpg.add_combo(
+                parent="_project_export_header", before="_export_channel",
+                label="Render pipeline", tag="_export_pipeline", width=-1,
+                items=["Current RT mode", "PBR-lite", "Stylized (SH Edit)", "Original"],
+                default_value="Current RT mode",
             )
         with dpg.collapsing_header(
             parent="_rt_group", label="V3 PBR-lite", default_open=True,
@@ -362,15 +550,110 @@ class PBRLiteViewer(SHMaterialViewer):
             dpg.add_checkbox(tag="_pbr_secondary_rays", label="Reflection/refraction rays",
                              default_value=True, callback=lambda: setattr(self, "_dirty", True))
 
+    def queue_startup_segmentation(self, backend="auto", clusters=8):
+        """Queue the universal automatic-segmentation stage for the first frame."""
+        backend = str(backend or "auto").lower()
+        clusters = max(2, min(50, int(clusters)))
+        if dpg.does_item_exist("_AutoSegmentK"):
+            dpg.set_value("_AutoSegmentK", clusters)
+        if backend == "sam":
+            if dpg.does_item_exist("_segment_mode"):
+                dpg.set_value("_segment_mode", "SAM-driven")
+            for tag, visible in (("_manual_segment_group", False),
+                                 ("_auto_segment_group", False),
+                                 ("_sam_driven_group", True)):
+                if dpg.does_item_exist(tag):
+                    dpg.configure_item(tag, show=visible)
+            self.sam_driven_flag = True
+        else:
+            if dpg.does_item_exist("_segment_mode"):
+                dpg.set_value("_segment_mode", "Auto")
+            for tag, visible in (("_manual_segment_group", False),
+                                 ("_auto_segment_group", True),
+                                 ("_sam_driven_group", False)):
+                if dpg.does_item_exist(tag):
+                    dpg.configure_item(tag, show=visible)
+            algorithm = "HDBSCAN (auto K)"
+            if backend == "kmeans" or not getattr(self.opt, "HAS_SEMANTIC_FEATURES", True):
+                algorithm = "KMeans (fixed K)"
+            if dpg.does_item_exist("_ClusterAlgo"):
+                dpg.set_value("_ClusterAlgo", algorithm)
+            self.auto_segment_flag = True
+        if dpg.does_item_exist("_view_mode"):
+            dpg.set_value("_view_mode", self.VIEW_SEGMENTATION)
+        self._dirty = True
+
+
+def _choose_scene_path():
+    """Open a native directory chooser when no scene path was supplied."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        selected = filedialog.askdirectory(title="Select a trained 3DGS scene")
+        root.destroy()
+        return selected or None
+    except Exception:
+        return None
+
 
 def main():
     parser = ArgumentParser(description="3DGS-RTMaterial V3 PBR-lite viewer")
-    parser.add_argument("-m", "--model_path", required=True)
-    parser.add_argument("-f", "--feature_iteration", type=int, default=10000)
-    parser.add_argument("-s", "--scene_iteration", type=int, default=30000)
+    parser.add_argument("-m", "--model_path", default=None,
+                        help="model directory, point_cloud directory, or trained scene PLY")
+    parser.add_argument("-f", "--feature_iteration", type=int, default=-1,
+                        help="SAGA feature iteration; -1 selects the latest complete pair")
+    parser.add_argument("-s", "--scene_iteration", type=int, default=-1,
+                        help="scene iteration; -1 selects the latest trained PLY")
     parser.add_argument("--scale", type=float, default=2.0)
     parser.add_argument("--environment", default=None)
+    parser.add_argument("--one-click", action="store_true",
+                        help="import, automatically segment, then open the PBR editor")
+    parser.add_argument("--fit-camera", default="auto",
+                        choices=("auto", "always", "never"),
+                        help="camera fitting: auto fits plain 3DGS scenes and preserves SAGA cameras")
+    parser.add_argument("--auto-segment", default="none",
+                        choices=("none", "auto", "hdbscan", "kmeans", "sam"),
+                        help="startup segmentation backend")
+    parser.add_argument("--multiview-selection", default=None,
+                        help="JSON created by segmentation.multiview_selection")
+    parser.add_argument("--clusters", type=int, default=8,
+                        help="cluster count for universal KMeans fallback")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="resolve and validate scene assets without starting CUDA or the GUI")
     args = parser.parse_args()
+
+    model_path = args.model_path
+    selected_from_dialog = False
+    if model_path is None and not args.dry_run:
+        model_path = _choose_scene_path()
+        selected_from_dialog = model_path is not None
+    if model_path is None:
+        output_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        discovered = discover_scenes(output_root)
+        if discovered:
+            model_path = str(discovered[0].model_path)
+            print(f"No scene selected; using {model_path}")
+    if model_path is None:
+        parser.error("no trained scene selected and no valid scene exists under ./output")
+    if selected_from_dialog:
+        args.one_click = True
+
+    try:
+        assets = resolve_scene_assets(
+            model_path, scene_iteration=args.scene_iteration,
+            feature_iteration=args.feature_iteration)
+    except (FileNotFoundError, ValueError) as exc:
+        parser.error(str(exc))
+
+    print(f"Scene: {assets.scene_ply}")
+    if assets.has_semantic_features:
+        print(f"Segmentation assets: {assets.feature_ply} + {assets.scale_gate}")
+    else:
+        print("Segmentation assets: generated geometry/appearance proxy")
+    if args.dry_run:
+        return
 
     opt = RTGSConfig()
     opt.r = args.scale
@@ -378,18 +661,31 @@ def main():
     opt.width, opt.height = opt.window_width, opt.window_height
     opt.control_width, opt.control_height = int(350 * (2 / opt.r)), int(700 * (2 / opt.r))
     opt.font_size = min(28, max(16, int(18 * (2 / opt.r))))
-    opt.MODEL_PATH = args.model_path
-    opt.FEATURE_GAUSSIAN_ITERATION = args.feature_iteration
-    opt.SCENE_GAUSSIAN_ITERATION = args.scene_iteration
-    for label, path in (("Scene PLY", opt.SCENE_PCD_PATH),
-                        ("Feature PLY", opt.FEATURE_PCD_PATH),
-                        ("Scale gate", opt.SCALE_GATE_PATH)):
-        if not os.path.isfile(path):
-            parser.error(f"{label} not found: {path}")
+    opt.MODEL_PATH = str(assets.model_path)
+    opt.RESOLVED_SCENE_PCD = str(assets.scene_ply)
+    opt.RESOLVED_FEATURE_PCD = str(assets.feature_ply) if assets.feature_ply else None
+    opt.RESOLVED_SCALE_GATE = str(assets.scale_gate) if assets.scale_gate else None
+    opt.HAS_SEMANTIC_FEATURES = assets.has_semantic_features
+    # Existing SAGA assets use the viewer's established camera convention.  Plain
+    # 3DGS PLYs have no such contract, so one-click imports fit those by default.
+    opt.AUTO_FIT_CAMERA = args.fit_camera == "always" or (
+        args.fit_camera == "auto" and args.one_click and not assets.has_semantic_features)
+    opt.FEATURE_GAUSSIAN_ITERATION = assets.feature_iteration or -1
+    opt.SCENE_GAUSSIAN_ITERATION = assets.scene_iteration or -1
     scene = GaussianModel(opt.sh_degree)
     feature = FeatureGaussianModel(opt.FEATURE_DIM)
     gate = torch.nn.Sequential(torch.nn.Linear(1, opt.FEATURE_DIM), torch.nn.Sigmoid()).cuda()
-    PBRLiteViewer(opt, scene, feature, gate, environment_path=args.environment).render()
+    viewer = PBRLiteViewer(opt, scene, feature, gate, environment_path=args.environment)
+    if args.multiview_selection:
+        if dpg.does_item_exist("_multiview_selection_path"):
+            dpg.set_value("_multiview_selection_path", args.multiview_selection)
+        args.auto_segment = "sam"
+    backend = args.auto_segment
+    if args.one_click and backend == "none":
+        backend = "auto"
+    if backend != "none":
+        viewer.queue_startup_segmentation(backend, args.clusters)
+    viewer.render()
 
 
 if __name__ == "__main__":

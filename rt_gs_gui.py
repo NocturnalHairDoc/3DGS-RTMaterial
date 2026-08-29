@@ -37,6 +37,8 @@ from scene import GaussianModel, FeatureGaussianModel
 from gaussian_renderer import render, render_contrastive_feature
 from scene.cameras import Camera
 from utils.graphics_utils import focal2fov, fov2focal
+from segmentation.membership_io import load_gaussian_membership
+from viewer.scene_import import build_proxy_features
 
 # Optional: depth rasterizer for ray-tracing view
 try:
@@ -70,6 +72,41 @@ KEYWORD_MATERIAL_MAP = [
 ]
 
 
+def _align_heatmap_to_image(heat, image_hw):
+    """Return a 2D heatmap aligned to an image's ``(height, width)``.
+
+    The contrastive-feature rasterizer can expose its spatial axes as
+    ``(width, height)`` while the RGB rasterizer returns ``(height, width)``.
+    This is invisible for square viewports but must be corrected before the
+    two results are composited.  The interpolation fallback also keeps the
+    preview safe if the renderers use different resolutions in the future.
+    """
+    if heat.ndim != 2:
+        raise ValueError(f"heatmap must be 2D, got shape {tuple(heat.shape)}")
+
+    target_hw = tuple(int(value) for value in image_hw)
+    if tuple(heat.shape) == target_hw:
+        return heat
+    if tuple(reversed(heat.shape)) == target_hw:
+        return heat.transpose(0, 1)
+
+    return torch.nn.functional.interpolate(
+        heat.unsqueeze(0).unsqueeze(0),
+        size=target_hw,
+        mode="bilinear",
+        align_corners=False,
+    ).squeeze(0).squeeze(0)
+
+
+def _reduce_prompt_score_map(scores):
+    """Collapse only the prompt axis, preserving both spatial dimensions."""
+    if scores.ndim == 2:
+        return scores
+    if scores.ndim == 3:
+        return torch.max(scores, dim=-1).values
+    raise ValueError(f"prompt score map must be 2D or 3D, got shape {tuple(scores.shape)}")
+
+
 # ---------- Config ----------
 class RTGSConfig:
     r = 2
@@ -91,18 +128,27 @@ class RTGSConfig:
     MODEL_PATH = "./output/figurines"
     FEATURE_GAUSSIAN_ITERATION = 10000
     SCENE_GAUSSIAN_ITERATION = 30000
+    RESOLVED_SCENE_PCD = None
+    RESOLVED_FEATURE_PCD = None
+    RESOLVED_SCALE_GATE = None
+    HAS_SEMANTIC_FEATURES = True
+    AUTO_FIT_CAMERA = False
 
     @property
     def SCALE_GATE_PATH(self):
-        return os.path.join(self.MODEL_PATH, f"point_cloud/iteration_{self.FEATURE_GAUSSIAN_ITERATION}/scale_gate.pt")
+        return self.RESOLVED_SCALE_GATE or os.path.join(
+            self.MODEL_PATH, f"point_cloud/iteration_{self.FEATURE_GAUSSIAN_ITERATION}/scale_gate.pt")
 
     @property
     def FEATURE_PCD_PATH(self):
-        return os.path.join(self.MODEL_PATH, f"point_cloud/iteration_{self.FEATURE_GAUSSIAN_ITERATION}/contrastive_feature_point_cloud.ply")
+        return self.RESOLVED_FEATURE_PCD or os.path.join(
+            self.MODEL_PATH,
+            f"point_cloud/iteration_{self.FEATURE_GAUSSIAN_ITERATION}/contrastive_feature_point_cloud.ply")
 
     @property
     def SCENE_PCD_PATH(self):
-        return os.path.join(self.MODEL_PATH, f"point_cloud/iteration_{self.SCENE_GAUSSIAN_ITERATION}/scene_point_cloud.ply")
+        return self.RESOLVED_SCENE_PCD or os.path.join(
+            self.MODEL_PATH, f"point_cloud/iteration_{self.SCENE_GAUSSIAN_ITERATION}/scene_point_cloud.ply")
 
 
 # ---------- Orbit Camera (same as SAGA) ----------
@@ -244,6 +290,10 @@ class RTGSViewerGUI:
         self.save_flag = False
         self.save_full_mask_flag = False  # NEW: save entire _mask tensor
         self.load_segment_flag = False
+        # Optional confidence values affect only Segmentation preview rendering.
+        # Integer labels remain authoritative for editing, hiding, and materials.
+        self.soft_segment_membership = None
+        self.soft_segment_source = None
         self.chosen_feature = None
         self.gates = None
         self.proj_mat = None
@@ -281,9 +331,32 @@ class RTGSViewerGUI:
         # Load model
         print("Loading model...")
         self.engine["scene"].load_ply(opt.SCENE_PCD_PATH)
-        self.engine["feature"].load_ply(opt.FEATURE_PCD_PATH)
-        self.engine["scale_gate"].load_state_dict(torch.load(opt.SCALE_GATE_PATH))
+        if getattr(opt, "HAS_SEMANTIC_FEATURES", True):
+            self.engine["feature"].load_ply(opt.FEATURE_PCD_PATH)
+            self.engine["scale_gate"].load_state_dict(
+                torch.load(opt.SCALE_GATE_PATH, map_location="cuda"))
+            print("Segmentation features: learned SAGA contrastive features.")
+        else:
+            self.engine["feature"].load_ply_from_3dgs(opt.SCENE_PCD_PATH)
+            proxy = build_proxy_features(self.engine["scene"], opt.FEATURE_DIM)
+            self.engine["feature"]._point_features = torch.nn.Parameter(
+                proxy.contiguous(), requires_grad=False)
+            count = int(self.engine["feature"].get_xyz.shape[0])
+            self.engine["feature"].segment_times = 0
+            self.engine["feature"]._mask = torch.ones(count, dtype=torch.float32, device="cuda")
+            self.engine["feature"].old_mask = []
+            with torch.no_grad():
+                for parameter in self.engine["scale_gate"].parameters():
+                    parameter.zero_()
+                linear = next(
+                    (module for module in self.engine["scale_gate"].modules()
+                     if isinstance(module, torch.nn.Linear)), None)
+                if linear is not None and linear.bias is not None:
+                    linear.bias.fill_(4.0)
+            print("Segmentation features: generated geometry/appearance proxy (plain 3DGS input).")
         self._init_pca()
+        if getattr(opt, "AUTO_FIT_CAMERA", False):
+            self._fit_camera_to_scene()
         self.load_model = True
         print("Model loaded.")
 
@@ -327,6 +400,21 @@ class RTGSViewerGUI:
         idx_sort = torch.argsort(-L)
         V = V[:, idx_sort]
         self.proj_mat = V[:, :3]
+
+    def _fit_camera_to_scene(self):
+        """Robustly frame an imported scene without assuming origin or scale."""
+        xyz = self.engine["scene"].get_xyz.detach().float()
+        if xyz.numel() == 0:
+            return
+        center = xyz.median(dim=0).values
+        distances = torch.linalg.vector_norm(xyz - center, dim=1)
+        extent = torch.quantile(distances, 0.95).clamp_min(1e-3)
+        fovy = math.radians(float(self.camera.fovy))
+        radius = extent / max(math.sin(fovy * 0.5), 1e-3) * 1.10
+        # OrbitCamera stores the pan offset (the negative of the world target).
+        self.camera.center = (-center).detach().cpu().numpy().astype(np.float32)
+        self.camera.radius = float(radius.item())
+        print(f"Camera auto-fit: center={self.camera.center.tolist()}, radius={self.camera.radius:.4f}")
 
     def _construct_camera(self):
         pose = self.camera.pose_movecenter if self.camera.rot_mode == 1 else self.camera.pose_objcenter
@@ -413,6 +501,9 @@ class RTGSViewerGUI:
         scale_pts = feat_pts * gates.unsqueeze(0)
         scale_pts = torch.nn.functional.normalize(scale_pts, dim=-1, p=2)
         X = scale_pts.cpu().numpy().astype(np.float32)
+        if X.shape[0] < 2:
+            print("Auto segment: at least two Gaussians are required.")
+            return
 
         use_hdbscan = HDBSCAN_AVAILABLE
         if dpg.does_item_exist("_ClusterAlgo"):
@@ -420,7 +511,7 @@ class RTGSViewerGUI:
 
         if use_hdbscan:
             N = X.shape[0]
-            sample_size = max(500, int(0.02 * N))
+            sample_size = min(N, max(500, int(0.02 * N)))
             rng = np.random.default_rng(42)
             sample_idx = rng.choice(N, size=sample_size, replace=False)
             X_sample = X[sample_idx]
@@ -466,7 +557,7 @@ class RTGSViewerGUI:
 
         if not use_hdbscan:
             K = int(dpg.get_value("_AutoSegmentK")) if dpg.does_item_exist("_AutoSegmentK") else 8
-            K = max(2, min(50, K))
+            K = max(2, min(50, K, X.shape[0]))
             kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
             labels = kmeans.fit_predict(X)
             labels_t = torch.from_numpy(labels).cuda()
@@ -499,14 +590,23 @@ class RTGSViewerGUI:
     def _run_sam_driven_segment(self):
         """SAM-driven segmentation: project 2D SAM masks to 3D via multi-view voting."""
         try:
-            from segmentation.sam_driven import run_sam_driven_segment
-            n = run_sam_driven_segment(
-                self.opt.MODEL_PATH,
-                self.engine["scene"],
-                self.engine["feature"],
-                min_votes=2,
-                sample_rate=1.0,
-            )
+            from segmentation.sam_driven import (
+                run_multiview_selection, run_sam_driven_segment)
+            manifest = (dpg.get_value("_multiview_selection_path").strip()
+                        if dpg.does_item_exist("_multiview_selection_path") else "")
+            if manifest:
+                n = run_multiview_selection(
+                    manifest, self.opt.MODEL_PATH,
+                    self.engine["scene"], self.engine["feature"],
+                    diagnostics_path="./segmentation_res/multiview_diagnostics.json")
+            else:
+                n = run_sam_driven_segment(
+                    self.opt.MODEL_PATH,
+                    self.engine["scene"],
+                    self.engine["feature"],
+                    min_votes=2,
+                    sample_rate=1.0,
+                )
             if n >= 0:
                 self.hidden_segments = set()
                 self._update_material_labels()
@@ -517,7 +617,7 @@ class RTGSViewerGUI:
             import traceback
             traceback.print_exc()
 
-    def _segment_colors_from_mask(self, mask):
+    def _segment_colors_from_mask(self, mask, material=False):
         """mask: (N,) segment id per point. Returns (N, 3) RGB.
         Uses material type colors when assigned, else random segment colors."""
         if mask is None or mask.numel() == 0:
@@ -527,16 +627,22 @@ class RTGSViewerGUI:
         if self.segment_colors is None or self.segment_colors.shape[0] < max_id + 1:
             np.random.seed(42)
             self.segment_colors = np.random.rand(max_id + 1, 3).astype(np.float32)
+            # Mask value 1 is the unsegmented/background convention used by
+            # GaussianModel. Keep it neutral so selected objects stand out.
             self.segment_colors[0] = [0.2, 0.2, 0.2]
+            if self.segment_colors.shape[0] > 1:
+                self.segment_colors[1] = [0.12, 0.12, 0.12]
         colors = self.segment_colors.copy()
-        for sid in self.material_assignments:
-            mask_val = sid + 1
-            if mask_val < colors.shape[0]:
-                mat_type = self.material_assignments[sid].get("type", "Default")
-                colors[mask_val] = np.array(
-                    self.MATERIAL_TYPE_COLORS.get(mat_type, self.MATERIAL_TYPE_COLORS["Default"]),
-                    dtype=np.float32
-                )
+        if material:
+            for sid in self.material_assignments:
+                mask_val = sid + 1
+                if mask_val < colors.shape[0]:
+                    mat_type = self.material_assignments[sid].get("type", "Default")
+                    colors[mask_val] = np.array(
+                        self.MATERIAL_TYPE_COLORS.get(
+                            mat_type, self.MATERIAL_TYPE_COLORS["Default"]),
+                        dtype=np.float32
+                    )
         return torch.from_numpy(colors[ids]).cuda().float()
 
     def _update_material_labels(self):
@@ -710,7 +816,7 @@ class RTGSViewerGUI:
         # Fallback if depth not available: return tinted RGB by material color
         if normals is None:
             seg_mask_tensor = self.engine["scene"]._mask
-            seg_colors = self._segment_colors_from_mask(seg_mask_tensor)
+            seg_colors = self._segment_colors_from_mask(seg_mask_tensor, material=True)
             if seg_colors is not None:
                 mat_render = render(cam, self.engine["scene"], pipe, self.bg_color,
                                     override_color=seg_colors, filtered_mask=hide_mask)
@@ -900,6 +1006,8 @@ class RTGSViewerGUI:
             self.hidden_segments = set()
             self.material_labels = {}
             self.material_assignments = {}
+            self.soft_segment_membership = None
+            self.soft_segment_source = None
             self.segment_colors = None
             self._mat_map_cache = None
             self._mat_map_dirty = True
@@ -915,6 +1023,8 @@ class RTGSViewerGUI:
             self.new_click_xy = []
             self.roll_back = False
             self.prompt_num = 0
+            self.soft_segment_membership = None
+            self.soft_segment_source = None
             try:
                 self.engine["scene"].roll_back()
                 self.engine["feature"].roll_back()
@@ -941,21 +1051,26 @@ class RTGSViewerGUI:
             if self.chosen_feature is not None:
                 score_map = featmap @ self.chosen_feature
                 score_map = (score_map + 1.0) / 2.0
-                score_map = torch.max(score_map.squeeze(-1), dim=-1).values \
-                    if score_map.dim() > 2 else score_map.squeeze(-1)
+                score_map = _reduce_prompt_score_map(score_map)
 
         if self.auto_segment_flag:
             self.auto_segment_flag = False
+            self.soft_segment_membership = None
+            self.soft_segment_source = None
             self._run_auto_segment()
             self._dirty = True
 
         if self.sam_driven_flag:
             self.sam_driven_flag = False
+            self.soft_segment_membership = None
+            self.soft_segment_source = None
             self._run_sam_driven_segment()
             self._dirty = True
 
         if self.segment3d_flag:
             self.segment3d_flag = False
+            self.soft_segment_membership = None
+            self.soft_segment_source = None
             if len(self.new_click_xy) == 0:
                 print("Please right-click on an object to add a prompt, then click Segment 3D")
             else:
@@ -1016,32 +1131,36 @@ class RTGSViewerGUI:
             path = dpg.get_value("load_segment_path") if dpg.does_item_exist("load_segment_path") else ""
             if path and os.path.isfile(path):
                 try:
-                    try:
-                        loaded = torch.load(path, map_location="cpu", weights_only=True)
-                    except TypeError:
-                        loaded = torch.load(path, map_location="cpu")
-                    if hasattr(loaded, "numpy"):
-                        loaded = loaded.float()
-                    else:
-                        loaded = torch.tensor(loaded, dtype=torch.float)
                     scene = self.engine["scene"]
                     feat = self.engine["feature"]
-                    if loaded.shape[0] != scene.get_xyz.shape[0]:
-                        print(f"Load failed: mask length {loaded.shape[0]} != "
-                              f"scene points {scene.get_xyz.shape[0]}")
-                    else:
-                        mask_cuda = loaded.cuda()
-                        scene._mask = mask_cuda.clone()
-                        scene.segment_times = max(0, int(loaded.max().item()) - 1)
-                        scene.old_mask = []
-                        if feat.get_xyz.shape[0] == scene.get_xyz.shape[0]:
-                            feat._mask = mask_cuda.clone()
-                            feat.segment_times = scene.segment_times
-                            feat.old_mask = []
-                        self.hidden_segments = set()
-                        self._update_material_labels()
-                        self._last_segment_times = -1
-                        print(f"Loaded segmentation from {path} ({scene.segment_times} segments)")
+                    use_soft = (dpg.get_value("_load_soft_membership")
+                                if dpg.does_item_exist("_load_soft_membership") else False)
+                    membership = load_gaussian_membership(
+                        path, mode="soft" if use_soft else "binary",
+                        expected_count=scene.get_xyz.shape[0])
+                    loaded = torch.from_numpy(membership.labels).float()
+                    mask_cuda = loaded.cuda()
+                    scene._mask = mask_cuda.clone()
+                    scene.segment_times = max(0, int(loaded.max().item()) - 1)
+                    scene.old_mask = []
+                    if feat.get_xyz.shape[0] == scene.get_xyz.shape[0]:
+                        feat._mask = mask_cuda.clone()
+                        feat.segment_times = scene.segment_times
+                        feat.old_mask = []
+                    self.soft_segment_membership = (
+                        torch.from_numpy(membership.values).to(
+                            device=scene.get_xyz.device, dtype=torch.float32)
+                        if membership.mode == "soft" else None)
+                    self.soft_segment_source = (
+                        str(membership.confidence_path)
+                        if membership.confidence_path is not None else None)
+                    self.hidden_segments = set()
+                    self._update_material_labels()
+                    self._last_segment_times = -1
+                    suffix = (f"; soft preview: {self.soft_segment_source}"
+                              if self.soft_segment_source else "")
+                    print(f"Loaded segmentation from {path} "
+                          f"({scene.segment_times} segments{suffix})")
                 except Exception as e:
                     print("Load segmentation failed:", e)
             else:
@@ -1060,11 +1179,28 @@ class RTGSViewerGUI:
 
         elif view in (self.VIEW_SEGMENTATION, self.VIEW_MATERIAL):
             mask = self.engine["scene"]._mask
-            seg_colors = self._segment_colors_from_mask(mask)
+            seg_colors = self._segment_colors_from_mask(
+                mask, material=view == self.VIEW_MATERIAL)
             if seg_colors is not None:
                 seg_out = render(cam, self.engine["scene"], pipe, self.bg_color,
                                  override_color=seg_colors, filtered_mask=hide_mask)
                 img = seg_out["render"].permute(1, 2, 0)
+                if (view == self.VIEW_SEGMENTATION
+                        and self.soft_segment_membership is not None):
+                    values = self.soft_segment_membership[:, None].expand(-1, 3)
+                    soft_out = render(
+                        cam, self.engine["scene"], pipe,
+                        torch.zeros_like(self.bg_color), override_color=values,
+                        filtered_mask=hide_mask)
+                    threshold = (float(dpg.get_value("_soft_membership_threshold"))
+                                 if dpg.does_item_exist("_soft_membership_threshold")
+                                 else 0.35)
+                    coverage = (soft_out["render"][:1] >= threshold).float()
+                    rgb_out = render(
+                        cam, self.engine["scene"], pipe, self.bg_color,
+                        filtered_mask=hide_mask)["render"]
+                    composed = rgb_out * (1.0 - coverage) + seg_out["render"] * coverage
+                    img = composed.permute(1, 2, 0)
             else:
                 scene_out = render(cam, self.engine["scene"], pipe, self.bg_color,
                                    filtered_mask=hide_mask)
@@ -1072,8 +1208,7 @@ class RTGSViewerGUI:
 
             # Preview 2D: overlay score_map as a heatmap in Segmentation view
             if view == self.VIEW_SEGMENTATION and self.preview and score_map is not None:
-                # score_map: (H, W) in [0, 1]
-                heat = score_map.clamp(0, 1)  # (H, W)
+                heat = _align_heatmap_to_image(score_map.clamp(0, 1), img.shape[:2])
                 # Red channel boost for heatmap (warm = high score)
                 heat_rgb = torch.stack([heat, heat * 0.4, 1.0 - heat], dim=0)  # (3, H, W)
                 img_t = img.permute(2, 0, 1)  # (3, H, W)
@@ -1256,6 +1391,9 @@ class RTGSViewerGUI:
                 with dpg.group(tag="_sam_driven_group", show=False):
                     dpg.add_text("Needs sam_masks + mask_scales", color=[160, 160, 160])
                     dpg.add_text("V2.2: cross-view anchor graph", color=[160, 160, 160])
+                    dpg.add_input_text(
+                        label="Selection JSON", tag="_multiview_selection_path",
+                        default_value="", hint="multi-view selection manifest", width=-1)
                     dpg.add_button(label="Run SAM Instance Graph",
                                    callback=lambda: setattr(self, 'sam_driven_flag', True))
 
@@ -1325,6 +1463,15 @@ class RTGSViewerGUI:
                 dpg.add_separator()
                 dpg.add_input_text(label="", default_value="./segmentation_res/sam_driven_mask.pt",
                                    tag="load_segment_path")
+                dpg.add_checkbox(
+                    label="Confidence-aware preview", default_value=False,
+                    tag="_load_soft_membership",
+                    callback=lambda: setattr(self, '_dirty', True))
+                dpg.add_slider_float(
+                    label="Soft pixel threshold", default_value=0.35,
+                    min_value=0.05, max_value=0.95, format="%.3f",
+                    tag="_soft_membership_threshold",
+                    callback=lambda: setattr(self, '_dirty', True))
                 dpg.add_button(label="Load segmentation",
                                callback=lambda: setattr(self, 'load_segment_flag', True))
 

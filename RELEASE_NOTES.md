@@ -1,3 +1,41 @@
+# v3.2-multiview-selection
+
+## Calibrated photo selection to colored 3D instances
+
+- Adds an interactive selector for choosing one physical object in two or more
+  SAM-processed training photographs. Whole-object and fine-parts brushes can
+  select multiple proposals, which are unioned once per view before 3D voting.
+- Persists portable JSON selection manifests and accepts them in both the V3
+  GUI and the standalone SAM-to-Gaussian pipeline.
+- Corrects SAM projection to use the CUDA rasterizer's row-vector transform and
+  image-axis convention, with visibility-aware fusion and direct preservation
+  of selected Gaussian evidence.
+- Adds explicit single-object correspondence and requires `min_votes` support
+  per Gaussian, preventing correct masks from being rejected while suppressing
+  one-view background splat leakage.
+- Adds calibrated multi-view result rendering and neutralizes unselected
+  Gaussians so every recovered instance is displayed in a distinct color.
+
+---
+
+# v3.1-universal-import-export
+
+## One-click trained-scene workflow
+
+- Accepts model directories, `point_cloud` directories, standard or SAGA PLYs,
+  and automatically selects the latest usable scene/feature iterations.
+- Preserves learned SAGA segmentation when available and creates deterministic
+  geometry/appearance proxy features for plain 3DGS scenes.
+- Adds startup HDBSCAN/KMeans/SAM selection, a universal KMeans fallback, robust
+  small-scene handling, and camera fitting for plain imported scenes.
+- Loads degree-0 through degree-3 SH PLYs and pads lower-order coefficients for
+  the degree-3 renderer, enabling compatible outputs from other 3DGS projects.
+- Adds frozen PBR-lite PNG, turntable MP4, and PNG-sequence export using the same
+  dense maps, OptiX G-buffer, HDR, light, shadow, and secondary-ray state as the
+  interactive renderer.
+
+---
+
 # v3.0-pbr-lite
 
 ## Manual PBR-lite pipeline
@@ -17,8 +55,8 @@
 - All tested pixels were finite. Synchronized tracing/compositing measurements
   are reported separately from property-map rasterization and GUI overhead.
 
-See `docs/V3_PBR_LITE.md` for architecture, measurements, paper basis, and the
-recommended next stage.
+See `docs/V3_PBR_LITE.md` for architecture, measurements, paper basis, and
+limitations.
 
 ## Verification
 
@@ -34,8 +72,8 @@ recommended next stage.
 
 ## Cross-view instances
 
-- Groups spatially neighbouring Gaussians into a configurable sparse anchor graph.
-- Projects SAM masks with a point-centre z-buffer and casts mask votes to anchors.
+- Groups spatially neighboring Gaussians into a configurable sparse anchor graph.
+- Projects SAM masks with a point-center z-buffer and casts mask votes to anchors.
 - Associates cross-view mask nodes using 3D overlap, visibility, lightweight RGB
   mask context, 32-D SAGA features, and anchor-graph connectivity.
 - Resolves instances with unary voting, graph smoothing, and spatial connected cuts.
@@ -44,8 +82,7 @@ recommended next stage.
 - Replaces the unsupported `torch.flatnonzero` call on the real-data path with a
   PyTorch-version-compatible expression.
 
-See `docs/V2.2_INSTANCE_GRAPH.md` for design, measurements, limitations, and the
-next update plan.
+See `docs/V2.2_INSTANCE_GRAPH.md` for design, measurements, and limitations.
 
 ## Verification
 

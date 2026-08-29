@@ -71,17 +71,21 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, features_folder = None, masks_folder = None, mask_scale_folder = None, sample_rate = 1.0, allow_principle_point_shift = False):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, features_folder = None, masks_folder = None, mask_scale_folder = None, sample_rate = 1.0, allow_principle_point_shift = False, view_names=None):
     cam_infos = []
+    wanted = None if view_names is None else {Path(str(name)).stem for name in view_names}
     for idx, key in enumerate(cam_extrinsics):
         if idx % 10 >= sample_rate * 10:
+            continue
+        extr = cam_extrinsics[key]
+        image_name = Path(extr.name).stem
+        if wanted is not None and image_name not in wanted:
             continue
         sys.stdout.write('\r')
         # the exact output you're looking for:
         sys.stdout.write(f"Reading camera {idx+1}/{len(cam_extrinsics)}")
         sys.stdout.flush()
 
-        extr = cam_extrinsics[key]
         intr = cam_intrinsics[extr.camera_id]
         height = intr.height
         width = intr.width
@@ -146,7 +150,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, llffhold=8, need_features=False, need_masks=False, sample_rate = 1.0, allow_principle_point_shift = False, replica=False):
+def readColmapSceneInfo(path, images, eval, llffhold=8, need_features=False, need_masks=False, sample_rate = 1.0, allow_principle_point_shift = False, replica=False, view_names=None):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -163,7 +167,7 @@ def readColmapSceneInfo(path, images, eval, llffhold=8, need_features=False, nee
     mask_dir = "sam_masks"
     mask_scale_dir = "mask_scales"
 
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir), features_folder=os.path.join(path, feature_dir) if need_features else None, masks_folder=os.path.join(path, mask_dir) if need_masks else None, mask_scale_folder=os.path.join(path, mask_scale_dir) if need_masks else None, sample_rate=sample_rate, allow_principle_point_shift = allow_principle_point_shift)
+    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir), features_folder=os.path.join(path, feature_dir) if need_features else None, masks_folder=os.path.join(path, mask_dir) if need_masks else None, mask_scale_folder=os.path.join(path, mask_scale_dir) if need_masks else None, sample_rate=sample_rate, allow_principle_point_shift = allow_principle_point_shift, view_names=view_names)
 
     if not replica:
         cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)

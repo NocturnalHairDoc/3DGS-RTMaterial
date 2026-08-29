@@ -57,6 +57,24 @@ class FrozenGaussianSnapshot:
     def get_features(self):
         return torch.cat((self._features_dc, self._features_rest), dim=1)
 
+    @property
+    def get_scaling(self):
+        return torch.exp(self._scaling)
+
+    @property
+    def get_rotation(self):
+        return torch.nn.functional.normalize(self._rotation)
+
+    @property
+    def get_opacity(self):
+        return torch.sigmoid(self._opacity)
+
+    def get_covariance(self, scaling_modifier=1):
+        from utils.general_utils import build_scaling_rotation, strip_symmetric
+        matrix = build_scaling_rotation(
+            scaling_modifier * self.get_scaling, self._rotation)
+        return strip_symmetric(matrix @ matrix.transpose(1, 2))
+
 
 @dataclass(frozen=True)
 class ExportSnapshot:
@@ -67,9 +85,11 @@ class ExportSnapshot:
     visible_mask: torch.Tensor | None
     material_assignments: dict
     camera: object
+    render_state: dict | None = None
 
 
-def capture_export_snapshot(model, camera, material_assignments, hidden_segments) -> ExportSnapshot:
+def capture_export_snapshot(model, camera, material_assignments, hidden_segments,
+                            render_state=None) -> ExportSnapshot:
     scene_mask = model._mask.detach().clone()
     hidden = torch.zeros_like(scene_mask, dtype=torch.bool)
     for segment_id in hidden_segments:
@@ -81,6 +101,7 @@ def capture_export_snapshot(model, camera, material_assignments, hidden_segments
         visible_mask=visible,
         material_assignments=copy.deepcopy(material_assignments),
         camera=copy.deepcopy(camera),
+        render_state=copy.deepcopy(render_state),
     )
 
 
