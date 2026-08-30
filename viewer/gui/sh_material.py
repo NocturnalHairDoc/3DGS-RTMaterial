@@ -1,11 +1,11 @@
 """
-rt_gs_gui_sh_clip.py — Material-SH + CLIP viewer
-=======================================
+viewer.gui.sh_material — Material-SH + CLIP viewer
+==================================================
 Strategy 1: edit Gaussian SH coefficients in-place to simulate material
 appearance, then restore after rendering.
 
-Changes from rt_gs_gui.py
---------------------------
+Changes from viewer.gui.base
+----------------------------
 - Adds MaterialSHEditor (materials/) after model load.
 - Replaces the Blinn-Phong post-processing pipeline in _render_raytracing
   with a simple: apply-SH-edits → render → restore cycle.
@@ -30,9 +30,7 @@ Matte  : zero ALL higher-order SH
          → purely diffuse; identical from every angle, "dead flat".
 Default: no change.
 
-Usage
------
-    python rt_gs_gui_sh_clip.py -m ./output/bicycle --scale 1.5
+This class is used by the public ``rt_gs_gui_v3.py`` launcher.
 """
 
 # Keep --help available without importing CUDA/GUI dependencies.
@@ -55,8 +53,9 @@ import dearpygui.dearpygui as dpg
 import imageio.v2 as imageio
 from argparse import ArgumentParser
 from scipy.spatial.transform import Rotation
+from viewer.gui import PUBLIC_ENTRY_FILE, REPOSITORY_ROOT
 
-from rt_gs_gui import RTGSViewerGUI, RTGSConfig
+from viewer.gui.base import RTGSViewerGUI, RTGSConfig
 from scene import GaussianModel, FeatureGaussianModel
 from gaussian_renderer import render
 
@@ -235,7 +234,7 @@ class SHMaterialViewer(RTGSViewerGUI):
 
     @staticmethod
     def _scoped_path(path, directory):
-        return scoped_output_path(path, directory, __file__)
+        return scoped_output_path(path, directory, str(PUBLIC_ENTRY_FILE))
 
     def _save_project(self):
         path = dpg.get_value("_project_state_path").strip()
@@ -1129,7 +1128,7 @@ def main():
     opt.font_size = min(28, max(16, int(18 * (2 / opt.r))))
     model_path = args.model_path
     if model_path is None:
-        output_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        output_root = str(REPOSITORY_ROOT / "output")
         candidates = []
         if os.path.isdir(output_root):
             for entry in sorted(os.listdir(output_root)):

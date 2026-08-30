@@ -2,6 +2,9 @@
 
 > Semester project for **SFU CMPT 743** (Visual Computing).
 
+Current release: **v3.2-multiview-selection**. Run the application with
+`python rt_gs_gui_v3.py`; the other GUI layers are internal package modules.
+
 This project provides a GUI for segmenting **3D Gaussian Splatting** scenes,
 assigning materials, and rendering the edited result. It supports SAGA features,
 OptiX ray tracing, spherical-harmonic (SH) editing, and a manually controlled
@@ -269,10 +272,7 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 
 ```
 3DGS-RTMaterial-V3/
-├── rt_gs_gui_v3.py            # V3 dual Stylized/PBR-lite viewer (entry point)
-├── rt_gs_gui_sh_clip.py       # Retained V2.2 SH-material + CLIP viewer
-├── rt_gs_gui.py               # Shared base viewer and Blinn-Phong alternative
-├── saga_gui.py                # Original SAGA GUI (segmentation only)
+├── rt_gs_gui_v3.py            # Canonical GUI launcher
 ├── materials/                 # Material models and editing utilities
 │   ├── pbr_lite.py            #   PBR fields, HDR, GGX and hybrid compositor
 │   └── sh_editor.py           #   SH-based material editor
@@ -283,6 +283,10 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 │   ├── instance_graph.py      #   Cross-view instance graph
 │   └── utils.py               #   Mask association and visibility helpers
 ├── viewer/                    # Viewer state, export and interaction support
+│   ├── gui/
+│   │   ├── base.py            #   Shared segmentation/ray-tracing viewer
+│   │   ├── sh_material.py     #   SH-material and CLIP layer
+│   │   └── pbr_viewer.py      #   V3 Stylized/PBR-lite implementation
 │   ├── project_state.py       #   Versioned state persistence and migration
 │   ├── export_manager.py      #   Background export worker and status queue
 │   ├── undo_manager.py        #   Bounded lightweight undo/redo history
@@ -309,6 +313,8 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 ├── gaussian_renderer/         # 3DGS CUDA rasterizer wrappers
 ├── submodules/                # downloaded by setup.sh; not stored in Git
 ├── demo/                      # Screenshots and demo video
+├── legacy/                    # Historical entry points, not the main GUI
+│   └── saga_gui.py            #   Original SAGA segmentation GUI
 ├── environment.yml            # Conda environment specification
 └── setup.sh                   # One-shot environment setup
 ```

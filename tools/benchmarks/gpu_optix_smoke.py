@@ -17,7 +17,7 @@ import torch
 
 from viewer.export_manager import linear_to_srgb
 from optix_integration import OptiXRenderer
-from rt_gs_gui import OrbitCamera
+from viewer.gui.base import OrbitCamera
 from scene import GaussianModel
 
 

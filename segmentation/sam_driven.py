@@ -639,7 +639,7 @@ def main():
     mask = gs_model._mask.cpu()
     torch.save(mask, args.output)
     print(f"Saved segmentation mask to {args.output}")
-    print("Run rt_gs_gui.py and click 'Load segmentation' to load this mask.")
+    print("Run rt_gs_gui_v3.py and click 'Load segmentation' to load this mask.")
 
 
 if __name__ == "__main__":

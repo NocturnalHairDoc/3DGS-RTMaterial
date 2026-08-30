@@ -21,6 +21,7 @@ import numpy as np
 import dearpygui.dearpygui as dpg
 from argparse import ArgumentParser
 from scipy.spatial.transform import Rotation as R
+from viewer.gui import REPOSITORY_ROOT
 
 try:
     from sklearn.cluster import MiniBatchKMeans as KMeans  # faster for large scenes
@@ -50,7 +51,7 @@ except Exception:
 # Optional: OptiX 3DGRT ray-tracing integration
 try:
     import sys as _optix_sys
-    _3dgrut_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "3dgrut"))
+    _3dgrut_root = str(REPOSITORY_ROOT / "3dgrut")
     if _3dgrut_root not in _optix_sys.path:
         _optix_sys.path.insert(0, _3dgrut_root)
     from optix_integration import OptiXRenderer
@@ -527,7 +528,7 @@ class RTGSViewerGUI:
             )
             sample_labels = clusterer.fit_predict(X_sample)
 
-            # Explicitly exclude noise label -1 (avoids saga_gui.py off-by-one bug)
+            # Explicitly exclude noise label -1 (avoids the legacy GUI's off-by-one bug)
             valid_labels = sorted(set(sample_labels.tolist()) - {-1})
             if len(valid_labels) < 2:
                 print(f"HDBSCAN found {len(valid_labels)} cluster(s); falling back to MiniBatchKMeans K=8")
@@ -1536,7 +1537,7 @@ def main():
     opt.font_size = min(28, max(16, int(18 * (2 / opt.r))))
     model_path = args.model_path
     if model_path is None:
-        output_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        output_root = str(REPOSITORY_ROOT / "output")
         candidates = []
         if os.path.isdir(output_root):
             for entry in sorted(os.listdir(output_root)):

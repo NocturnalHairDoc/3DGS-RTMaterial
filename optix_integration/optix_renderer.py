@@ -3,7 +3,7 @@ OptiXRenderer
 =============
 High-level renderer that ties together GaussianAdapter, RayGenerator, and the
 3DGRT Tracer.  Designed as a drop-in replacement for the Blinn-Phong
-approximation currently used in ``rt_gs_gui.py``.
+approximation currently used in ``viewer.gui.base``.
 
 Usage::
 
@@ -26,7 +26,7 @@ Usage::
     # result["opacity"] (H, W, 1)  float32 — accumulated opacity
 
 The renderer falls back gracefully to None if the 3DGRT plugin is not yet
-compiled, allowing ``rt_gs_gui.py`` to detect availability and fall back to
+compiled, allowing ``viewer.gui.base`` to detect availability and fall back to
 the existing Blinn-Phong path.
 """
 
@@ -207,7 +207,7 @@ class OptiXRenderer:
         """Render one frame using OptiX ray tracing.
 
         Args:
-            camera: Either an ``OrbitCamera`` (from rt_gs_gui.py) or a SAGA
+            camera: Either an ``OrbitCamera`` (from ``viewer.gui.base``) or a SAGA
                     ``Camera`` object.
             segment_mask: Optional (N,) int tensor. When provided, only
                           Gaussians with mask > 0 are ray-traced (for

@@ -52,7 +52,7 @@ class RayGenerator:
         self._grid_j = grid_j  # row index
 
     # ------------------------------------------------------------------
-    # Public: from OrbitCamera (as used in rt_gs_gui.py)
+    # Public: from OrbitCamera (as used in viewer.gui.base)
     # ------------------------------------------------------------------
 
     def from_orbit_camera(self, orbit_cam, region=None) -> Batch:
