@@ -243,10 +243,11 @@ incomplete boundaries.
 
 ```bash
 # 1. Train the base 3DGS scene
-python train_scene.py -s <data_dir> -m ./output-v2/<scene_name>
+python -m scripts.train_scene -s <data_dir> -m ./output-v2/<scene_name>
 
 # 2. Train contrastive CLIP features for segmentation
-python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
+python -m scripts.train_contrastive_feature \
+  -s <data_dir> -m ./output-v2/<scene_name>
 ```
 
 ---
@@ -294,6 +295,11 @@ python train_contrastive_feature.py -s <data_dir> -m ./output-v2/<scene_name>
 │   └── utils.py               #   Shared viewer helpers
 ├── training/                  # Training-only utilities
 │   └── utils.py               #   NaN-safe contrastive loss helpers
+├── scripts/                   # User-facing training and rendering commands
+│   ├── train_scene.py         #   Base 3DGS training
+│   ├── train_contrastive_feature.py # SAGA feature training
+│   ├── get_scale.py           #   SAM mask-scale preprocessing
+│   └── render.py              #   Scene/feature/mask rendering
 ├── tools/                     # Setup, diagnostics and benchmarks
 │   ├── runtime_check.py       #   Dependency/GPU architecture diagnostics
 │   ├── setup/                 #   Downloaded-source compatibility patches

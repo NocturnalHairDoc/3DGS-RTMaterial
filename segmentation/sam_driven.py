@@ -1,6 +1,7 @@
 """
 SAM-driven 3D segmentation: project 2D SAM masks to 3D Gaussian points via multi-view voting.
-Requires: extract_segment_everything_masks.py + get_scale.py to be run first.
+Requires SAM masks and mask scales; generate scales with
+``python -m scripts.get_scale`` when they are not already available.
 """
 
 import os
@@ -293,7 +294,7 @@ def run_sam_driven_segment(
         print("SAM-driven: sam_masks not found. Run extract_segment_everything_masks.py first.")
         return -1
     if masks_dir is None and not os.path.isdir(mask_scales_dir):
-        print("SAM-driven: mask_scales not found. Run get_scale.py first.")
+        print("SAM-driven: mask_scales not found. Run python -m scripts.get_scale first.")
         return -1
 
     # Build args for camera loading (from cfg_args)
