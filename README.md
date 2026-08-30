@@ -241,6 +241,13 @@ incomplete boundaries.
 
 ### Training a scene (from scratch)
 
+If starting from raw photographs, place them under `<data_dir>/input/` and
+create the COLMAP reconstruction first:
+
+```bash
+python -m scripts.convert -s <data_dir>
+```
+
 ```bash
 # 1. Train the base 3DGS scene
 python -m scripts.train_scene -s <data_dir> -m ./output-v2/<scene_name>
@@ -296,6 +303,7 @@ python -m scripts.train_contrastive_feature \
 ├── training/                  # Training-only utilities
 │   └── utils.py               #   NaN-safe contrastive loss helpers
 ├── scripts/                   # User-facing training and rendering commands
+│   ├── convert.py             #   Raw photos to COLMAP dataset
 │   ├── train_scene.py         #   Base 3DGS training
 │   ├── train_contrastive_feature.py # SAGA feature training
 │   ├── get_scale.py           #   SAM mask-scale preprocessing
