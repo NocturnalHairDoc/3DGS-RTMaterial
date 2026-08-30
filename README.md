@@ -155,10 +155,12 @@ pip install imageio einops slangtorch==1.3.18 "setuptools<80"
 
 ## Usage
 
-第一次使用 GUI 分割自己的物体，请按仓库内的中文逐步教程操作：
-**[在 GUI 中分割自己的物体：逐步复现教程](docs/GUI_OBJECT_SEGMENTATION_TUTORIAL_ZH.md)**。
-教程覆盖手动点选、自动聚类、多照片 SAM、视觉检查、掩码/完整工程保存，以及
-关闭 GUI 后重新加载验证。
+If this is your first time segmenting an object with the GUI, follow the
+**[step-by-step object segmentation tutorial](docs/GUI_OBJECT_SEGMENTATION_TUTORIAL_EN.md)**.
+A [Chinese version](docs/GUI_OBJECT_SEGMENTATION_TUTORIAL_ZH.md) is also
+available. The tutorial covers manual prompts, automatic clustering,
+multi-photo SAM selection, visual inspection, mask/project saving, and reload
+verification after restarting the GUI.
 
 ```bash
 conda activate gaussian_splatting_v2
