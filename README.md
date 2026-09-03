@@ -29,6 +29,14 @@ materials or lighting from the training images.
 
 [▶ Watch demo video](demo/Screencast%20from%202026-04-07%2022-43-38.webm)
 
+### Physically separated road water film
+
+![Road water-film material preview](demo/manual-mask-road-water-film-DSC8849.png)
+
+This is a **new work-in-progress material implementation**. It preserves the
+fitted M2 road albedo and adds a separately controlled physical water-film
+response. The material model and visual quality are still being adjusted.
+
 ---
 
 ## Features
